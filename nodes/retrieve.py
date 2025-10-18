@@ -5,6 +5,13 @@ Node RETRIEVE - Récupération de documents via recherche vectorielle PostgreSQL
 """
 Node RETRIEVE - Document retrieval via PostgreSQL/Supabase vector search
 """
+import os
+import logging
+from typing import Dict, List
+
+from langchain.schema import Document
+from langchain_openai import OpenAIEmbeddings
+from langchain_postgres import PGVector
 
 def retrieve(state:Dict)->Dict:
     """Retrieve documents based on the input state using vector search.
