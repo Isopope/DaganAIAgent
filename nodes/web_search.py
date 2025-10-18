@@ -10,7 +10,7 @@ from typing import Dict
 
 from langchain.schema import Document
 from tavily import TavilyClient
-from ..trusted_sources import (
+from trusted_sources import (
     TRUSTED_DOMAINS,
     get_search_query,
     is_trusted_source,

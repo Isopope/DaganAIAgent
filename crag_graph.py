@@ -25,7 +25,7 @@ from nodes import (
     web_search,
     generate
 )
-from nodes.validate_context import validate_domain
+from nodes.validate_context import validate_context as validate_domain
 
 # Logging
 logging.basicConfig(level=logging.INFO)
