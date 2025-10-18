@@ -6,7 +6,6 @@ Node WEB_SEARCH - Recherche web via Tavily (fallback CRAG) - Sources fiables pri
 Node WEB_SEARCH - Web search via Tavily (CRAG fallback) - Reliable sources prioritized
 """
 import os
-import logging
 from typing import Dict
 
 from langchain.schema import Document
@@ -89,7 +88,6 @@ def web_search(state:Dict)->Dict:
                     }
                 )
                 web_docs.append(doc)
-                logger.info(f"✅ Source fiable trouvée: {url} (score: {reliability_score:.2f})")
             elif content:
                 # Garder les sources non officielles avec score bas
                 doc = Document(
