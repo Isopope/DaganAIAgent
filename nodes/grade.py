@@ -41,7 +41,7 @@ def grade_documents(state:Dict)->Dict:
         openai_api_key=os.getenv("OPENAI_API_KEY")
     )
     filtered_docs= []
-    for doc in messages:
+    for i, doc in enumerate(messages):
         content= doc.page_content
         prompt = f"""Évalue si ce document contient des informations utiles pour répondre à la question.
 
@@ -64,13 +64,13 @@ Réponds UNIQUEMENT par 'oui' si le document est pertinent, 'non' sinon."""
             # Parser la réponse (oui/yes = pertinent, non/no = non pertinent)
             # Inclure aussi "pertinent" et "relevant" comme réponses positives
             if any(word in answer for word in ["oui", "yes", "pertinent", "relevant"]):
-                print(f"---GRADE: DOCUMENT {doc+1} RELEVANT---")
+                print(f"---GRADE: DOCUMENT {i+1} RELEVANT---")
                 filtered_docs.append(doc)
             else:
-                print(f"---GRADE: DOCUMENT {doc+1} NOT RELEVANT (réponse: {answer})---")
+                print(f"---GRADE: DOCUMENT {i+1} NOT RELEVANT (réponse: {answer})---")
             
         except Exception as e:
-            print(f"---GRADE ERROR for document {doc+1}: {str(e)}---")
+            print(f"---GRADE ERROR for document {i+1}: {str(e)}---")
             # En cas d'erreur, on garde le document par sécurite
             filtered_docs.append(doc)
     

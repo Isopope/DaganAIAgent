@@ -46,8 +46,8 @@ def retrieve(state:Dict)->Dict:
     
     #initialisation vectordb postgres/supabase
     vector_db= PGVector(
-        connection_string=postgres_connection_string,
-        embedding=embeddings,
+        connection=postgres_connection_string,
+        embeddings=embeddings,
         collection_name=collection_name,
         use_jsonb=True
     )

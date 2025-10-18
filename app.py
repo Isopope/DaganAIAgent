@@ -134,6 +134,927 @@ async def health_check():
     return {"status": "everything is ok"}
 
 
+def get_agent():
+    return {
+        "agent": app.state.agent,
+    }
+
+
+class DeleteVectorStoreRequest(BaseModel):
+    thread_id: str
+
+
+class AgentRequest(BaseModel):
+    input: str
+    thread_id: str
+
+
+class VectorizeRequest(BaseModel):
+    url: str
+    thread_id: str
+
+
+class CragQueryRequest(BaseModel):
+    question: str
+    conversation_id: str = None  # Optional, sera généré si non fourni
+
+
+@app.get("/")
+async def ping():
+    return {"message": "Alive"}
+
+
+@app.post("/stream_agent")
+async def stream_agent(
+    body: AgentRequest,
+    fastapi_request: Request,
+    agent: dict = Depends(get_agent),
+):
+
+    # No Authorization header required for stream_agent endpoint
+    api_key = fastapi_request.headers.get("Authorization") or None
+
+    # Create agent with thread_id for this session
+    session_agent = Agent(
+        checkpointer=agent["agent"].checkpointer,
+        thread_id=body.thread_id,
+    )
+    # build_graph accepts an optional api_key; pass None if absent
+    agent_runnable = session_agent.build_graph(api_key=api_key)
+
+    # Variables pour collecter les messages
+    collected_assistant_message = ""
+    user_message = body.input
+    collected_sources = []  # Pour stocker les sources utilisées
+
+    async def event_generator():
+        nonlocal collected_assistant_message, collected_sources
+        
+        # configuration for the agent; omit api_key when None
+        config = {"configurable": {"thread_id": body.thread_id}}
+        if api_key:
+            config["configurable"]["api_key"] = api_key
+
+        async for event in agent_runnable.astream_events(
+            input={"messages": [HumanMessage(content=body.input)]},
+            config=config,
+        ):
+            # Filter for chat model streaming events
+            if event["event"] == "on_chat_model_stream":
+                content = event["data"]["chunk"]
+                # Check if the chunk has content
+                if hasattr(content, "content") and content.content:
+                    # Collecter le message pour la sauvegarde
+                    collected_assistant_message += content.content
+                    
+                    print(content.content, end="", flush=True)
+                    yield (
+                        json.dumps(
+                            {
+                                "type": "chatbot",
+                                "content": content.content,
+                            }
+                        )
+                        + "\n"
+                    )
+
+            elif event["event"] == "on_tool_start":
+                tool_name = event.get("name", "unknown_tool")
+                tool_input = event["data"].get("input", {})
+
+                # Safely serialize tool input
+                try:
+                    if isinstance(tool_input, dict):
+                        serializable_input = {k: str(v) for k, v in tool_input.items()}
+                    else:
+                        serializable_input = str(tool_input)
+                except:
+                    serializable_input = "Unable to serialize input"
+
+                yield (
+                    json.dumps(
+                        {
+                            "type": "tool_start",
+                            "tool_name": tool_name,
+                            "content": serializable_input,
+                        }
+                    )
+                    + "\n"
+                )
+
+            elif event["event"] == "on_tool_end":
+                tool_name = event.get("name", "unknown_tool")
+                tool_output = event["data"].get("output")
+
+                # Safely serialize tool output
+                try:
+                    if hasattr(tool_output, "content"):
+                        # Handle ToolMessage objects
+                        serializable_output = str(tool_output.content)
+                    elif isinstance(tool_output, dict):
+                        serializable_output = {
+                            k: str(v) for k, v in tool_output.items()
+                        }
+                    elif isinstance(tool_output, list):
+                        serializable_output = [str(item) for item in tool_output]
+                    else:
+                        serializable_output = str(tool_output)
+                except:
+                    serializable_output = "Unable to serialize output"
+
+                # Extraire les sources du tool output (vector_search)
+                if tool_name == "vector_search" and isinstance(tool_output, dict):
+                    try:
+                        # Parser le JSON du résultat
+                        import json as json_module
+                        if hasattr(tool_output, "content"):
+                            result_data = json_module.loads(tool_output.content)
+                        else:
+                            result_data = tool_output
+                        
+                        # Extraire les documents sources
+                        if "documents" in result_data:
+                            for doc in result_data["documents"]:
+                                source_info = {
+                                    "type": "vectorstore",
+                                    "title": doc.get("title", "Document de la base de connaissances"),
+                                    "url": doc.get("url"),
+                                    "content": doc.get("content", "")[:500],  # Limiter la longueur
+                                    "relevance_score": doc.get("relevance_score"),
+                                    "metadata": doc.get("metadata", {})
+                                }
+                                collected_sources.append(source_info)
+                    except Exception as e:
+                        logging.error(f"Erreur lors de l'extraction des sources: {e}")
+
+                yield (
+                    json.dumps(
+                        {
+                            "type": "tool_end",
+                            "tool_name": tool_name,
+                            "content": serializable_output,
+                        }
+                    )
+                    + "\n"
+                )
+
+        # Sauvegarder la conversation après le streaming complet
+        if collected_assistant_message:
+            message_id = await save_conversation_message(
+                thread_id=body.thread_id,
+                user_message=user_message,
+                assistant_message=collected_assistant_message,
+                metadata={"api_endpoint": "stream_agent", "sources_count": len(collected_sources)}
+            )
+            
+            # Sauvegarder les sources si un message_id a été créé
+            if message_id and collected_sources:
+                for source in collected_sources:
+                    await save_information_source(
+                        thread_id=body.thread_id,
+                        message_id=message_id,
+                        source_type=source["type"],
+                        source_title=source["title"],
+                        source_url=source.get("url"),
+                        source_content=source.get("content"),
+                        relevance_score=source.get("relevance_score"),
+                        metadata=source.get("metadata", {})
+                    )
+
+
+    return StreamingResponse(event_generator(), media_type="application/json")
+
+
+@app.post("/vectorize")
+async def vectorize_url(
+    body: VectorizeRequest,
+):
+    """
+    Vectorize a URL by crawling it and creating embeddings in PostgreSQL
+    This endpoint reads the Tavily API key from the environment variable `TAVILY_API_KEY`.
+    """
+    try:
+        tavily_api_key = os.getenv("TAVILY_API_KEY")
+        tavily_client = TavilyClient(api_key=tavily_api_key)
+        crawl_result = tavily_client.crawl(
+            url=body.url, format="text", include_favicon=True
+        )
+
+        documents = []
+        for result in crawl_result["results"]:
+            raw_content = result.get("raw_content")
+            if not raw_content:  # Skip if None, empty string, or falsy
+                continue
+            
+            doc = Document(
+                page_content=raw_content,
+                metadata={
+                    "url": result.get("url", ""),
+                    "thread_id": body.thread_id,
+                    "favicon": result.get("favicon", ""),
+                },
+            )
+            documents.append(doc)
+
+        if not documents:
+            raise HTTPException(status_code=400, detail="No content found to vectorize")
+
+        # Initialize OpenAI embeddings
+        embeddings = OpenAIEmbeddings(
+            model="text-embedding-3-large",
+            dimensions=2000,  # Réduction de dimensions pour optimiser les coûts
+            openai_api_key=os.getenv("OPENAI_API_KEY")
+        )
+
+        # Use PGVector for PostgreSQL/Supabase
+        collection_name = os.getenv("DOCUMENTS_COLLECTION", "crawled_documents")
+        
+        vector_store = PGVector(
+            connection=postgres_connection_string,
+            embeddings=embeddings,
+            collection_name=collection_name,
+            use_jsonb=True
+        )
+        
+        # Add documents with their IDs
+        uuids = [str(uuid4()) for _ in range(len(documents))]
+        vector_store.add_documents(documents, ids=uuids)
+
+        return JSONResponse(
+            content={
+                "success": True,
+                "message": f"Successfully vectorized {len(documents)} documents from {body.url}",
+                "documents_count": len(documents),
+            }
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error vectorizing URL: {str(e)}")
+
+
+@app.post("/delete_vector_store")
+async def delete_vector_store(body: DeleteVectorStoreRequest):
+    """
+    Delete all documents and checkpoints for a specific thread_id from PostgreSQL/Supabase
+    """
+    try:
+        # Delete vectorized documents from langchain_pg_embedding using metadata filter
+        # First, get the collection name
+        collection_name = os.getenv("DOCUMENTS_COLLECTION", "crawled_documents")
+        
+        # Delete from langchain_pg_embedding where cmetadata contains thread_id
+        # Using raw SQL via supabase
+        result_docs = supabase.rpc(
+            'delete_documents_by_thread',
+            {
+                'collection_name_param': collection_name,
+                'thread_id_param': body.thread_id
+            }
+        ).execute()
+        
+        # Delete checkpoints
+        checkpoints_table = "langgraph_checkpoints"
+        result_checkpoints = supabase.table(checkpoints_table) \
+            .delete() \
+            .eq("thread_id", body.thread_id) \
+            .execute()
+        
+        # Delete checkpoint writes
+        checkpoint_writes_table = "langgraph_checkpoint_writes"
+        try:
+            result_writes = supabase.table(checkpoint_writes_table) \
+                .delete() \
+                .eq("thread_id", body.thread_id) \
+                .execute()
+            writes_count = len(result_writes.data) if result_writes.data else 0
+        except Exception as e:
+            print(f"Warning: Could not delete from checkpoint_writes: {e}")
+            writes_count = 0
+
+        docs_count = result_docs.data if result_docs.data else 0
+        checkpoints_count = len(result_checkpoints.data) if result_checkpoints.data else 0
+
+        return JSONResponse(
+            content={
+                "success": True,
+                "message": f"Deleted documents for thread_id '{body.thread_id}'",
+                "deleted_counts": {
+                    "documents": docs_count,
+                    "checkpoints": checkpoints_count,
+                    "checkpoint_writes": writes_count,
+                },
+            }
+        )
+
+    except Exception as e:
+        print(f"Error in delete_vector_store: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error deleting vector store: {str(e)}"
+        )
+
+
+@app.post("/crag/query")
+async def crag_query(
+    body: CragQueryRequest,
+    fastapi_request: Request,
+):
+    """
+    Endpoint pour tester le workflow CRAG complet avec mémoire conversationnelle
+    
+    Le workflow CRAG:
+    1. RETRIEVE: Recherche documents pertinents dans MongoDB
+    2. GRADE: Évalue la pertinence des documents
+    3. DECIDE: Route vers génération ou web search
+    4. GENERATE: Génère la réponse avec historique conversationnel
+       OU
+    4a. TRANSFORM: Réécrit la question pour web search (avec contexte conversationnel)
+    4b. WEB_SEARCH: Recherche web avec Tavily
+    4c. GENERATE: Génère la réponse avec les résultats web
+    
+    Args:
+        body: CragQueryRequest avec question et conversation_id optionnel
+        
+    Returns:
+        JSON avec la réponse générée et des métadonnées du workflow
+    """
+    try:
+        # Générer un conversation_id si non fourni (utiliser thread_id pour LangGraph)
+        thread_id = body.conversation_id or str(uuid4())
+        
+        print(f"\n{'='*60}")
+        print(f"CRAG Query Request")
+        print(f"{'='*60}")
+        print(f"Question: {body.question}")
+        print(f"Thread ID: {thread_id}")
+        print(f"{'='*60}\n")
+        
+        # Récupérer le graph CRAG (avec InMemorySaver intégré)
+        crag_graph = get_crag_graph()
+        
+        # Préparer l'état initial avec MessagesState
+        # On crée un HumanMessage avec la question
+        initial_state = {
+            "messages": [HumanMessage(content=body.question)],
+            "documents": [],
+            "generation": "",
+            "transformed_question": ""
+        }
+        
+        # Configuration pour le checkpointer (thread_id pour la mémoire)
+        config = {"configurable": {"thread_id": thread_id}}
+        
+        # Exécuter le workflow CRAG avec persistance de la mémoire (SYNC avec InMemorySaver)
+        final_state = crag_graph.invoke(initial_state, config)
+        
+        print(f"\n{'='*60}")
+        print(f"CRAG Workflow Completed")
+        print(f"{'='*60}")
+        print(f"Documents récupérés: {len(final_state.get('documents', []))}")
+        print(f"Réponse générée: {len(final_state.get('generation', ''))} caractères")
+        print(f"{'='*60}\n")
+        
+        # Construire la réponse
+        response_data = {
+            "success": True,
+            "conversation_id": thread_id,
+            "question": body.question,
+            "answer": final_state.get("generation", ""),
+            "metadata": {
+                "documents_count": len(final_state.get("documents", [])),
+                "documents_sources": [
+                    doc.metadata.get("source", "Unknown") 
+                    for doc in final_state.get("documents", [])
+                ] if final_state.get("documents") else []
+            }
+        }
+        
+        return JSONResponse(content=response_data)
+        
+    except Exception as e:
+        print(f"❌ Erreur dans CRAG workflow: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error in CRAG workflow: {str(e)}"
+        )
+
+
+@app.post("/crag/stream")
+async def crag_stream(
+    body: CragQueryRequest,
+    fastapi_request: Request,
+):
+    """
+    Endpoint CRAG avec streaming en temps réel (Server-Sent Events).
+    
+    Version streaming de /crag/query qui permet de suivre l'exécution
+    du workflow node par node et de recevoir la réponse token par token.
+    
+    Le workflow CRAG:
+    1. RETRIEVE: Recherche documents pertinents dans MongoDB
+    2. GRADE: Évalue la pertinence des documents
+    3. DECIDE: Route vers génération ou web search
+    4. GENERATE: Génère la réponse avec historique conversationnel (streaming)
+       OU
+    4a. TRANSFORM: Réécrit la question pour web search (avec contexte)
+    4b. WEB_SEARCH: Recherche web avec Tavily
+    4c. GENERATE: Génère la réponse avec résultats web (streaming)
+    
+    Args:
+        body: CragQueryRequest avec question et conversation_id optionnel
+        
+    Returns:
+        StreamingResponse avec events SSE (Server-Sent Events)
+        
+    Format des events:
+        - {"type": "node_start", "node": "retrieve"}
+        - {"type": "node_end", "node": "retrieve", "documents_count": 5}
+        - {"type": "message_chunk", "content": "...", "node": "generate"}
+        - {"type": "complete", "conversation_id": "...", "answer": "..."}
+    """
+    # No Authorization header required for streaming endpoint
+    
+    async def event_generator():
+        """Génère les events SSE pour le streaming."""
+        try:
+            # Générer un conversation_id si non fourni
+            thread_id = body.conversation_id or str(uuid4())
+            
+            print(f"\n{'='*60}")
+            print(f"🌊 CRAG Stream Request")
+            print(f"{'='*60}")
+            print(f"Question: {body.question}")
+            print(f"Thread ID: {thread_id}")
+            print(f"{'='*60}\n")
+            
+            # Récupérer le graph CRAG
+            crag_graph = get_crag_graph()
+            
+            # Préparer l'état initial
+            initial_state = {
+                "messages": [HumanMessage(content=body.question)],
+                "documents": [],
+                "generation": "",
+                "transformed_question": ""
+            }
+            
+            # Configuration pour le checkpointer
+            config = {"configurable": {"thread_id": thread_id}}
+            
+            # Variables pour accumuler la réponse et les sources
+            accumulated_answer = ""
+            final_documents_count = 0
+            collected_sources = []  # Pour stocker les sources CRAG
+            
+            # Streamer le workflow CRAG
+            async for event in crag_graph.astream(initial_state, config):
+                # event est un dict avec une clé = nom du node
+                # et valeur = état retourné par ce node
+                
+                for node_name, node_output in event.items():
+                    print(f"📊 Node: {node_name}")
+                    
+                    # ─────────────────────────────────────────────────
+                    # VALIDATE_DOMAIN node
+                    # ─────────────────────────────────────────────────
+                    if node_name == "validate_domain":
+                        is_valid = node_output.get("is_valid_domain", True)
+                        
+                        if not is_valid:
+                            yield (
+                                json.dumps({
+                                    "type": "node_end",
+                                    "node": "validate_domain",
+                                    "message": "❌ Question hors-sujet administratif"
+                                }) + "\n"
+                            )
+                        else:
+                            yield (
+                                json.dumps({
+                                    "type": "node_end",
+                                    "node": "validate_domain",
+                                    "message": "✅ Question validée (domaine administratif)"
+                                }) + "\n"
+                            )
+                    
+                    # ─────────────────────────────────────────────────
+                    # RETRIEVE node
+                    # ─────────────────────────────────────────────────
+                    elif node_name == "retrieve":
+                        docs_count = len(node_output.get("documents", []))
+                        final_documents_count = docs_count
+                        
+                        # Capturer les sources des documents récupérés
+                        for i, doc in enumerate(node_output.get("documents", [])):
+                            relevance_score = 1.0 - (i * 0.05)
+                            title = doc.page_content.split('\n')[0][:100] if doc.page_content else "Document"
+                            
+                            collected_sources.append({
+                                "type": "vectorstore",
+                                "title": title,
+                                "url": doc.metadata.get("source", doc.metadata.get("url")),
+                                "content": doc.page_content[:500],
+                                "relevance_score": relevance_score,
+                                "metadata": doc.metadata
+                            })
+                        
+                        yield (
+                            json.dumps({
+                                "type": "node_start",
+                                "node": "retrieve",
+                                "message": f"🔍 Recherche de documents pertinents..."
+                            }) + "\n"
+                        )
+                        
+                        yield (
+                            json.dumps({
+                                "type": "node_end",
+                                "node": "retrieve",
+                                "documents_count": docs_count,
+                                "message": f"✅ {docs_count} documents trouvés"
+                            }) + "\n"
+                        )
+                    
+                    # ─────────────────────────────────────────────────
+                    # GRADE_DOCUMENTS node
+                    # ─────────────────────────────────────────────────
+                    elif node_name == "grade_documents":
+                        docs_count = len(node_output.get("documents", []))
+                        final_documents_count = docs_count
+                        
+                        yield (
+                            json.dumps({
+                                "type": "node_start",
+                                "node": "grade_documents",
+                                "message": "📝 Évaluation de la pertinence..."
+                            }) + "\n"
+                        )
+                        
+                        yield (
+                            json.dumps({
+                                "type": "node_end",
+                                "node": "grade_documents",
+                                "documents_count": docs_count,
+                                "message": f"✅ {docs_count} documents pertinents"
+                            }) + "\n"
+                        )
+                    
+                    # ─────────────────────────────────────────────────
+                    # DECIDE_TO_GENERATE node
+                    # ─────────────────────────────────────────────────
+                    elif node_name == "decide_to_generate":
+                        docs_count = len(node_output.get("documents", []))
+                        decision = "generate" if docs_count > 0 else "web_search"
+                        
+                        yield (
+                            json.dumps({
+                                "type": "node_end",
+                                "node": "decide_to_generate",
+                                "decision": decision,
+                                "message": f"🎯 Route: {'Génération directe' if docs_count > 0 else 'Recherche web'}"
+                            }) + "\n"
+                        )
+                    
+                    # ─────────────────────────────────────────────────
+                    # TRANSFORM_QUERY node
+                    # ─────────────────────────────────────────────────
+                    elif node_name == "transform_query":
+                        transformed = node_output.get("transformed_question", "")
+                        
+                        yield (
+                            json.dumps({
+                                "type": "node_start",
+                                "node": "transform_query",
+                                "message": "🔄 Reformulation de la question..."
+                            }) + "\n"
+                        )
+                        
+                        yield (
+                            json.dumps({
+                                "type": "node_end",
+                                "node": "transform_query",
+                                "transformed_question": transformed,
+                                "message": f"✅ Question reformulée"
+                            }) + "\n"
+                        )
+                    
+                    # ─────────────────────────────────────────────────
+                    # WEB_SEARCH node
+                    # ─────────────────────────────────────────────────
+                    elif node_name == "web_search":
+                        docs_count = len(node_output.get("documents", []))
+                        final_documents_count = docs_count
+                        
+                        # Capturer les sources web (Tavily)
+                        for i, doc in enumerate(node_output.get("documents", [])):
+                            relevance_score = 0.9 - (i * 0.05)
+                            title = doc.page_content.split('\n')[0][:100] if doc.page_content else "Résultat web"
+                            
+                            collected_sources.append({
+                                "type": "web",
+                                "title": title,
+                                "url": doc.metadata.get("source", doc.metadata.get("url")),
+                                "content": doc.page_content[:500],
+                                "relevance_score": relevance_score,
+                                "metadata": {
+                                    **doc.metadata,
+                                    "search_engine": "tavily"
+                                }
+                            })
+                        
+                        yield (
+                            json.dumps({
+                                "type": "node_start",
+                                "node": "web_search",
+                                "message": "🌐 Recherche web Tavily..."
+                            }) + "\n"
+                        )
+                        
+                        yield (
+                            json.dumps({
+                                "type": "node_end",
+                                "node": "web_search",
+                                "documents_count": docs_count,
+                                "message": f"✅ {docs_count} résultats trouvés"
+                            }) + "\n"
+                        )
+                    
+                    # ─────────────────────────────────────────────────
+                    # GENERATE node - STREAMING TOKEN PAR TOKEN
+                    # ─────────────────────────────────────────────────
+                    elif node_name == "generate":
+                        yield (
+                            json.dumps({
+                                "type": "node_start",
+                                "node": "generate",
+                                "message": "💬 Génération de la réponse..."
+                            }) + "\n"
+                        )
+                        
+                        # Le node generate retourne déjà la réponse complète
+                        # Pour du vrai streaming, il faudrait modifier le node generate
+                        # Pour l'instant, on envoie la réponse complète
+                        generation = node_output.get("generation", "")
+                        accumulated_answer = generation
+                        
+                        # Simuler un streaming en envoyant par chunks
+                        chunk_size = 50  # Caractères par chunk
+                        for i in range(0, len(generation), chunk_size):
+                            chunk = generation[i:i+chunk_size]
+                            yield (
+                                json.dumps({
+                                    "type": "message_chunk",
+                                    "content": chunk,
+                                    "node": "generate"
+                                }) + "\n"
+                            )
+                        
+                        yield (
+                            json.dumps({
+                                "type": "node_end",
+                                "node": "generate",
+                                "message": "✅ Réponse générée"
+                            }) + "\n"
+                        )
+            
+            # ─────────────────────────────────────────────────────────
+            # EVENT FINAL - Workflow complet
+            # ─────────────────────────────────────────────────────────
+            print(f"\n{'='*60}")
+            print(f"✅ CRAG Stream Completed")
+            print(f"{'='*60}")
+            print(f"Documents: {final_documents_count}")
+            print(f"Réponse: {len(accumulated_answer)} caractères")
+            print(f"Sources: {len(collected_sources)}")
+            print(f"{'='*60}\n")
+            
+            # Sauvegarder la conversation et les sources
+            if accumulated_answer:
+                message_id = await save_conversation_message(
+                    thread_id=thread_id,
+                    user_message=body.question,
+                    assistant_message=accumulated_answer,
+                    metadata={
+                        "api_endpoint": "crag_stream",
+                        "documents_count": final_documents_count,
+                        "sources_count": len(collected_sources)
+                    }
+                )
+                
+                # Sauvegarder les sources
+                if message_id and collected_sources:
+                    for source in collected_sources:
+                        await save_information_source(
+                            thread_id=thread_id,
+                            message_id=message_id,
+                            source_type=source["type"],
+                            source_title=source["title"],
+                            source_url=source.get("url"),
+                            source_content=source.get("content"),
+                            relevance_score=source.get("relevance_score"),
+                            metadata=source.get("metadata", {})
+                        )
+            
+            yield (
+                json.dumps({
+                    "type": "complete",
+                    "conversation_id": thread_id,
+                    "question": body.question,
+                    "answer": accumulated_answer,
+                    "metadata": {
+                        "documents_count": final_documents_count,
+                        "sources_count": len(collected_sources)
+                    }
+                }) + "\n"
+            )
+            
+        except Exception as e:
+            print(f"❌ Erreur dans CRAG stream: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
+            yield (
+                json.dumps({
+                    "type": "error",
+                    "error": str(e),
+                    "message": f"Erreur: {str(e)}"
+                }) + "\n"
+            )
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # Désactive le buffering nginx
+        }
+    )
+
+
+@app.get("/conversations/{thread_id}")
+async def get_conversation(thread_id: str):
+    """
+    Récupère l'historique complet d'une conversation par thread_id
+    """
+    try:
+        response = supabase.rpc(
+            "get_conversation_history",
+            {"p_thread_id": thread_id}
+        ).execute()
+        
+        return {
+            "thread_id": thread_id,
+            "message_count": len(response.data),
+            "messages": response.data
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
+
+
+@app.get("/conversations/user/{user_name}")
+async def get_user_conversations(user_name: str, limit: int = 50):
+    """
+    Récupère toutes les conversations d'un utilisateur
+    """
+    try:
+        response = supabase.rpc(
+            "get_user_conversations",
+            {"p_user_name": user_name, "p_limit": limit}
+        ).execute()
+        
+        return {
+            "user_name": user_name,
+            "conversation_count": len(response.data),
+            "conversations": response.data
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
+
+
+@app.get("/conversations")
+async def list_all_conversations(limit: int = 100):
+    """
+    Liste toutes les conversations récentes (tous utilisateurs)
+    """
+    try:
+        response = supabase.table("conversations").select("*").order("created_at", desc=True).limit(limit).execute()
+        
+        # Grouper par thread_id
+        conversations_by_thread = {}
+        for msg in response.data:
+            thread_id = msg["thread_id"]
+            if thread_id not in conversations_by_thread:
+                conversations_by_thread[thread_id] = []
+            conversations_by_thread[thread_id].append(msg)
+        
+        return {
+            "total_messages": len(response.data),
+            "thread_count": len(conversations_by_thread),
+            "conversations": conversations_by_thread
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
+
+
+@app.delete("/conversations/{thread_id}")
+async def delete_conversation(thread_id: str):
+    """
+    Supprime une conversation complète
+    """
+    try:
+        response = supabase.rpc(
+            "delete_conversation",
+            {"p_thread_id": thread_id}
+        ).execute()
+        
+        deleted_count = response.data if response.data else 0
+        
+        return {
+            "message": f"Conversation supprimée",
+            "thread_id": thread_id,
+            "deleted_messages": deleted_count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
+
+
+@app.get("/sources/message/{message_id}")
+async def get_message_sources(message_id: str):
+    """
+    Récupère toutes les sources utilisées pour un message spécifique
+    """
+    try:
+        response = supabase.rpc(
+            "get_message_sources",
+            {"p_message_id": message_id}
+        ).execute()
+        
+        return {
+            "message_id": message_id,
+            "source_count": len(response.data),
+            "sources": response.data
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
+
+
+@app.get("/sources/thread/{thread_id}")
+async def get_thread_sources(thread_id: str, limit: int = 50):
+    """
+    Récupère toutes les sources utilisées dans un thread
+    """
+    try:
+        response = supabase.rpc(
+            "get_thread_sources",
+            {"p_thread_id": thread_id, "p_limit": limit}
+        ).execute()
+        
+        return {
+            "thread_id": thread_id,
+            "source_count": len(response.data),
+            "sources": response.data
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
+
+
+@app.get("/conversations/{thread_id}/with-sources")
+async def get_conversation_with_sources(thread_id: str):
+    """
+    Récupère une conversation complète avec toutes ses sources
+    Format enrichi similaire à ChatGPT
+    """
+    try:
+        # Récupérer la conversation
+        conv_response = supabase.rpc(
+            "get_conversation_history",
+            {"p_thread_id": thread_id}
+        ).execute()
+        
+        # Pour chaque message, récupérer ses sources
+        enriched_messages = []
+        for msg in conv_response.data:
+            sources_response = supabase.rpc(
+                "get_message_sources",
+                {"p_message_id": msg["id"]}
+            ).execute()
+            
+            enriched_messages.append({
+                **msg,
+                "sources": sources_response.data
+            })
+        
+        return {
+            "thread_id": thread_id,
+            "message_count": len(enriched_messages),
+            "messages": enriched_messages
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
+
+
 
 
 
