@@ -67,10 +67,10 @@ Réponds UNIQUEMENT par "oui" si la question est valide, "non" si hors-sujet."""
         is_valid = any(word in answer for word in ["oui", "yes", "valide", "valid"])
         
         if is_valid:
-            print(f"✅ Question VALIDE (domaine administratif)")
+            print(f" Question VALIDE (domaine administratif)")
             return {"is_valid_domain": True}
         else:
-            print(f"❌ Question HORS-SUJET (domaine: {answer})")
+            print(f" Question HORS-SUJET (domaine: {answer})")
             
             # Message poli de refus
             refusal_message = """Désolé, je suis **Dagan**, assistant spécialisé dans les **procédures administratives togolaises** 🇹🇬
@@ -89,6 +89,6 @@ Ta question ne semble pas concerner ces domaines. Peux-tu reformuler avec une qu
             }
     
     except Exception as e:
-        print(f"⚠️ Erreur validation domaine: {e}")
+        print(f" Erreur validation domaine: {e}")
         # En cas d'erreur, on laisse passer pour éviter de bloquer
         return {"is_valid_domain": True}
