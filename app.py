@@ -163,168 +163,6 @@ class CragQueryRequest(BaseModel):
 async def ping():
     return {"message": "Alive"}
 
-
-@app.post("/stream_agent")
-async def stream_agent(
-    body: AgentRequest,
-    fastapi_request: Request,
-    agent: dict = Depends(get_agent),
-):
-
-    # No Authorization header required for stream_agent endpoint
-    api_key = fastapi_request.headers.get("Authorization") or None
-
-    # Create agent with thread_id for this session
-    session_agent = Agent(
-        checkpointer=agent["agent"].checkpointer,
-        thread_id=body.thread_id,
-    )
-    # build_graph accepts an optional api_key; pass None if absent
-    agent_runnable = session_agent.build_graph(api_key=api_key)
-
-    # Variables pour collecter les messages
-    collected_assistant_message = ""
-    user_message = body.input
-    collected_sources = []  # Pour stocker les sources utilisées
-
-    async def event_generator():
-        nonlocal collected_assistant_message, collected_sources
-        
-        # configuration for the agent; omit api_key when None
-        config = {"configurable": {"thread_id": body.thread_id}}
-        if api_key:
-            config["configurable"]["api_key"] = api_key
-
-        async for event in agent_runnable.astream_events(
-            input={"messages": [HumanMessage(content=body.input)]},
-            config=config,
-        ):
-            # Filter for chat model streaming events
-            if event["event"] == "on_chat_model_stream":
-                content = event["data"]["chunk"]
-                # Check if the chunk has content
-                if hasattr(content, "content") and content.content:
-                    # Collecter le message pour la sauvegarde
-                    collected_assistant_message += content.content
-                    
-                    print(content.content, end="", flush=True)
-                    yield (
-                        json.dumps(
-                            {
-                                "type": "chatbot",
-                                "content": content.content,
-                            }
-                        )
-                        + "\n"
-                    )
-
-            elif event["event"] == "on_tool_start":
-                tool_name = event.get("name", "unknown_tool")
-                tool_input = event["data"].get("input", {})
-
-                # Safely serialize tool input
-                try:
-                    if isinstance(tool_input, dict):
-                        serializable_input = {k: str(v) for k, v in tool_input.items()}
-                    else:
-                        serializable_input = str(tool_input)
-                except:
-                    serializable_input = "Unable to serialize input"
-
-                yield (
-                    json.dumps(
-                        {
-                            "type": "tool_start",
-                            "tool_name": tool_name,
-                            "content": serializable_input,
-                        }
-                    )
-                    + "\n"
-                )
-
-            elif event["event"] == "on_tool_end":
-                tool_name = event.get("name", "unknown_tool")
-                tool_output = event["data"].get("output")
-
-                # Safely serialize tool output
-                try:
-                    if hasattr(tool_output, "content"):
-                        # Handle ToolMessage objects
-                        serializable_output = str(tool_output.content)
-                    elif isinstance(tool_output, dict):
-                        serializable_output = {
-                            k: str(v) for k, v in tool_output.items()
-                        }
-                    elif isinstance(tool_output, list):
-                        serializable_output = [str(item) for item in tool_output]
-                    else:
-                        serializable_output = str(tool_output)
-                except:
-                    serializable_output = "Unable to serialize output"
-
-                # Extraire les sources du tool output (vector_search)
-                if tool_name == "vector_search" and isinstance(tool_output, dict):
-                    try:
-                        # Parser le JSON du résultat
-                        import json as json_module
-                        if hasattr(tool_output, "content"):
-                            result_data = json_module.loads(tool_output.content)
-                        else:
-                            result_data = tool_output
-                        
-                        # Extraire les documents sources
-                        if "documents" in result_data:
-                            for doc in result_data["documents"]:
-                                source_info = {
-                                    "type": "vectorstore",
-                                    "title": doc.get("title", "Document de la base de connaissances"),
-                                    "url": doc.get("url"),
-                                    "content": doc.get("content", "")[:500],  # Limiter la longueur
-                                    "relevance_score": doc.get("relevance_score"),
-                                    "metadata": doc.get("metadata", {})
-                                }
-                                collected_sources.append(source_info)
-                    except Exception as e:
-                        logging.error(f"Erreur lors de l'extraction des sources: {e}")
-
-                yield (
-                    json.dumps(
-                        {
-                            "type": "tool_end",
-                            "tool_name": tool_name,
-                            "content": serializable_output,
-                        }
-                    )
-                    + "\n"
-                )
-
-        # Sauvegarder la conversation après le streaming complet
-        if collected_assistant_message:
-            message_id = await save_conversation_message(
-                thread_id=body.thread_id,
-                user_message=user_message,
-                assistant_message=collected_assistant_message,
-                metadata={"api_endpoint": "stream_agent", "sources_count": len(collected_sources)}
-            )
-            
-            # Sauvegarder les sources si un message_id a été créé
-            if message_id and collected_sources:
-                for source in collected_sources:
-                    await save_information_source(
-                        thread_id=body.thread_id,
-                        message_id=message_id,
-                        source_type=source["type"],
-                        source_title=source["title"],
-                        source_url=source.get("url"),
-                        source_content=source.get("content"),
-                        relevance_score=source.get("relevance_score"),
-                        metadata=source.get("metadata", {})
-                    )
-
-
-    return StreamingResponse(event_generator(), media_type="application/json")
-
-
 @app.post("/vectorize")
 async def vectorize_url(
     body: VectorizeRequest,
@@ -513,18 +351,27 @@ async def crag_query(
         print(f"Réponse générée: {len(final_state.get('generation', ''))} caractères")
         print(f"{'='*60}\n")
         
-        # Construire la réponse
+        # Construire la réponse avec métadonnées (url et favicon)
+        documents = final_state.get("documents", [])
+        sources = []
+        
+        for doc in documents:
+            source_metadata = {
+                "url": doc.metadata.get("url", ""),
+                "favicon": doc.metadata.get("favicon", ""),
+                "is_official": doc.metadata.get("is_official", False),
+                "reliability_score": doc.metadata.get("reliability_score", 0.0)
+            }
+            sources.append(source_metadata)
+        
         response_data = {
             "success": True,
             "conversation_id": thread_id,
             "question": body.question,
             "answer": final_state.get("generation", ""),
             "metadata": {
-                "documents_count": len(final_state.get("documents", [])),
-                "documents_sources": [
-                    doc.metadata.get("source", "Unknown") 
-                    for doc in final_state.get("documents", [])
-                ] if final_state.get("documents") else []
+                "documents_count": len(documents),
+                "sources": sources
             }
         }
         
@@ -746,17 +593,15 @@ async def crag_stream(
                         docs_count = len(node_output.get("documents", []))
                         final_documents_count = docs_count
                         
-                        # Capturer les sources web (Tavily)
+                        # Capturer les sources web (Tavily) avec url et favicon
                         for i, doc in enumerate(node_output.get("documents", [])):
-                            relevance_score = 0.9 - (i * 0.05)
-                            title = doc.page_content.split('\n')[0][:100] if doc.page_content else "Résultat web"
-                            
                             collected_sources.append({
                                 "type": "web",
-                                "title": title,
-                                "url": doc.metadata.get("source", doc.metadata.get("url")),
+                                "url": doc.metadata.get("url", ""),
+                                "favicon": doc.metadata.get("favicon", ""),
                                 "content": doc.page_content[:500],
-                                "relevance_score": relevance_score,
+                                "is_official": doc.metadata.get("is_official", False),
+                                "reliability_score": doc.metadata.get("reliability_score", 0.5),
                                 "metadata": {
                                     **doc.metadata,
                                     "search_engine": "tavily"

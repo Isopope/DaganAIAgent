@@ -1,0 +1,10 @@
+{
+  "success": true,
+  "conversation_id": "test_web_search_456",
+  "question": "Qui sont les acteurs impliqués dans le Système d’Octroi de Permis de Construire ?",
+  "answer": "D'après les informations officielles, les acteurs impliqués dans le Système d’Octroi de Permis de Construire sont principalement les services administratifs responsables de l'instruction et de l'approbation des demandes.  \n\nVoici une décomposition possible des acteurs impliqués :  \n1. **Les agents ou services de l'administration urbaine** : ils examinent les dossiers, vérifient la conformité des projets avec la réglementation, et prennent la décision d'accorder ou de rejeter le permis.  \n2. **Les responsables de la plateforme ou du système numérique** : ils gèrent le suivi des dossiers, assurent la traçabilité, et permettent aux acteurs de suivre l’état d’avancement.  \n3. **Les demandeurs (candidats à l’octroi du permis)** : ils déposent leur dossier et suivent son traitement.  \n\nMême si la liste précise des acteurs n’est pas explicitement mentionnée dans la source, on peut en déduire que ce sont principalement ces trois catégories d’acteurs qui interviennent dans le processus.  \n\n**Sources :**  \n- [Service Public du Togo (https://service-public.gouv.tg/faq)](https://service-public.gouv.tg/faq)",
+  "metadata": {
+    "documents_count": 0,
+    "sources": []
+  }
+}

@@ -65,41 +65,35 @@ def web_search(state:Dict)->Dict:
             max_results=max_results,
             search_depth="advanced",
             country="togo",
-            include_domains=TRUSTED_DOMAINS[:5] 
+            include_favicon=True,
+            include_domains=TRUSTED_DOMAINS[:5]
         )
         results = search_response.get("results", [])
         
         web_docs = []
         for result in results:
             content = result.get("content", "")
-            url = result.get("url", "Unknown URL")
+            url = result.get("url", "")
+            favicon = result.get("favicon", "")
             
-            if content and is_trusted_source(url):
-                # Calculer le score de fiabilité
-                reliability_score = get_source_reliability_score(url)
-                
-                doc = Document(
-                    page_content=content,
-                    metadata={
-                        "url": url,
-                        "source": "tavily_web_search",
-                        "reliability_score": reliability_score,
-                        "is_official": True
-                    }
-                )
-                web_docs.append(doc)
-            elif content:
-                # Garder les sources non officielles avec score bas
-                doc = Document(
-                    page_content=content,
-                    metadata={
-                        "url": url,
-                        "source": "tavily_web_search",
-                        "reliability_score": 0.3,
-                        "is_official": False
-                    }
-                )
-                web_docs.append(doc)
+            if not content or not url:
+                continue
+            
+            is_official = is_trusted_source(url)
+            reliability_score = get_source_reliability_score(url) if is_official else 0.3
+            
+            # Créer les métadonnées avec url et favicon
+            doc = Document(
+                page_content=content,
+                metadata={
+                    "url": url,
+                    "favicon": favicon,
+                    "source": "tavily_web_search",
+                    "reliability_score": reliability_score,
+                    "is_official": is_official
+                }
+            )
+            web_docs.append(doc)
         
         # Trier par score de fiabilité (sources officielles en premier)
         web_docs.sort(key=lambda doc: doc.metadata.get("reliability_score", 0), reverse=True)
