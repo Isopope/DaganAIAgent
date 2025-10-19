@@ -38,25 +38,68 @@ def validate_context(state:Dict)->Dict:
     )
     
     # Prompt de validation du domaine
-    validation_prompt = f"""Tu es un système de validation pour un assistant togolais sur les procédures administratives.
+    validation_prompt = f"""Tu es un système de validation pour un assistant togolais sur les procédures administratives et services publics.
 
 Détermine si cette question concerne les procédures administratives, documents officiels, ou services publics au Togo.
 
 Question: {question}
 
-**Sujets VALIDES** (réponds "oui"):
-- Documents officiels (passeport, carte d'identité, acte de naissance, visa, etc.)
-- Procédures administratives (mariage, divorce, création d'entreprise, etc.)
-- Services publics togolais (impôts, santé, éducation, etc.)
-- Droits et obligations citoyens au Togo
-- Institutions gouvernementales togolaises
+**Sujets VALIDES** (réponds "oui") - Domaines couverts:
+
+📚 **Éducation & Formation**
+- Inscription scolaire, bourses d'études, diplômes, équivalences
+- Formation professionnelle, apprentissage
+
+💼 **Emploi & Sécurité sociale**
+- Recherche d'emploi, contrats de travail, droits des travailleurs
+- Sécurité sociale, retraite, allocations
+
+📄 **Papiers & Citoyenneté**
+- Documents d'identité (passeport, carte d'identité, acte de naissance, visa)
+- Nationalité, naturalisation, état civil
+- Mariage, divorce, adoption
+
+💰 **Fiscalité, Foncier & Douanes**
+- Impôts, taxes, déclarations fiscales
+- Propriété foncière, cadastre, permis de construire
+- Procédures douanières, import/export
+
+🌾 **Agriculture, Élevage & Industrie**
+- Subventions agricoles, certifications
+- Permis d'exploitation, normes industrielles
+- Création et gestion d'entreprise
+
+🏥 **Santé & Protection sociale**
+- Accès aux soins, assurance maladie
+- Aide sociale, allocations familiales
+- Hygiène et santé publique
+
+📡 **Télécommunication, Communication et Culture**
+- Services télécom, internet
+- Médias, presse, liberté d'expression
+- Patrimoine culturel, événements culturels
+
+🏘️ **Habitat & Transport**
+- Logement social, aide au logement
+- Permis de conduire, immatriculation de véhicules
+- Transport public, infrastructures
+
+⚖️ **Justice**
+- Procédures judiciaires, tribunaux
+- Droits et obligations juridiques
+- Médiation, arbitrage
+
+🛡️ **Sécurité & Sûreté**
+- Forces de l'ordre, police, gendarmerie
+- Protection civile, pompiers
+- Sécurité des biens et personnes
 
 **Sujets INVALIDES** (réponds "non"):
-- Questions générales sans rapport avec l'administration
-- Conversations générales (météo, sport, actualités non-administratives)
-- Questions techniques (programmation, sciences, etc.)
+- Questions générales sans rapport avec l'administration ou les services publics
+- Conversations générales (météo, sport, divertissement)
+- Questions techniques hors contexte administratif (programmation, sciences pures)
 - Sujets personnels sans lien administratif
-- Demandes de conseils non-administratifs
+- Demandes de conseils médicaux/juridiques personnalisés (orientations uniquement)
 
 Réponds UNIQUEMENT par "oui" si la question est valide, "non" si hors-sujet."""
 
@@ -73,15 +116,24 @@ Réponds UNIQUEMENT par "oui" si la question est valide, "non" si hors-sujet."""
             print(f" Question HORS-SUJET (domaine: {answer})")
             
             # Message poli de refus
-            refusal_message = """Désolé, je suis **Dagan**, assistant spécialisé dans les **procédures administratives togolaises** 🇹🇬
+            refusal_message = """Désolé, je suis **Dagan**, assistant spécialisé dans les **procédures administratives et services publics togolais** 🇹🇬
 
-Je peux t'aider avec :
-- 📄 Documents officiels (passeport, carte d'identité, acte de naissance...)
-- 🏛️ Procédures administratives (mariage, création d'entreprise...)
-- 🏥 Services publics (santé, éducation, impôts...)
-- ⚖️ Droits et obligations citoyens
+Je peux t'aider dans ces domaines :
 
-Ta question ne semble pas concerner ces domaines. Peux-tu reformuler avec une question administrative ? 😊"""
+📚 **Éducation & Formation** | � **Emploi & Sécurité sociale**
+📄 **Papiers & Citoyenneté** | 💰 **Fiscalité, Foncier & Douanes**
+🌾 **Agriculture, Élevage & Industrie** | 🏥 **Santé & Protection sociale**
+📡 **Télécommunication, Communication et Culture** | �️ **Habitat & Transport**
+⚖️ **Justice** | 🛡️ **Sécurité & Sûreté**
+
+**Exemples de questions que je peux traiter :**
+- Comment obtenir un passeport ?
+- Quelles sont les étapes pour créer une entreprise ?
+- Comment faire une demande de bourse scolaire ?
+- Où déclarer mes impôts ?
+- Comment obtenir un permis de construire ?
+
+Ta question ne semble pas concerner ces domaines administratifs. Peux-tu reformuler ? 😊"""
             
             return {
                 "is_valid_domain": False,

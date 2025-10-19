@@ -66,11 +66,30 @@ def web_search(state:Dict)->Dict:
             search_depth="advanced",
             country="togo",
             include_favicon=True,
+            include_answer="basic",
+            include_raw_content="markdown",
+            chunks_per_source=2,
             include_domains=TRUSTED_DOMAINS[:5]
         )
         results = search_response.get("results", [])
         
         web_docs = []
+        
+        # Ajouter la réponse globale LLM si disponible
+        global_answer = search_response.get("answer")
+        if global_answer:
+            doc = Document(
+                page_content=global_answer,
+                metadata={
+                    "url": "",
+                    "favicon": "",
+                    "source": "tavily_web_search_global_answer",
+                    "reliability_score": 0.8,  # Score élevé pour la réponse globale
+                    "is_official": False
+                }
+            )
+            web_docs.append(doc)
+        
         for result in results:
             content = result.get("content", "")
             url = result.get("url", "")
@@ -99,6 +118,8 @@ def web_search(state:Dict)->Dict:
         web_docs.sort(key=lambda doc: doc.metadata.get("reliability_score", 0), reverse=True)
         
         print(f"---FOUND {len(web_docs)} WEB RESULTS ({sum(1 for d in web_docs if d.metadata.get('is_official'))} sources officielles)---")
+        if global_answer:
+            print(f"---GLOBAL ANSWER INCLUDED: {global_answer[:100]}...---")
         
         # Ajouter aux documents existants (pour contexte de génération)
         all_documents = existing_docs + web_docs

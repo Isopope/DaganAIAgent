@@ -151,7 +151,7 @@ class AgentRequest(BaseModel):
 
 class VectorizeRequest(BaseModel):
     url: str
-    thread_id: str
+    # Pas de thread_id nécessaire : documents publics partagés
 
 
 class CragQueryRequest(BaseModel):
@@ -175,7 +175,7 @@ async def vectorize_url(
         tavily_api_key = os.getenv("TAVILY_API_KEY")
         tavily_client = TavilyClient(api_key=tavily_api_key)
         crawl_result = tavily_client.crawl(
-            url=body.url, format="text", include_favicon=True
+            url=body.url, format="text", include_favicon=True,limit=4
         )
 
         documents = []
@@ -188,7 +188,6 @@ async def vectorize_url(
                 page_content=raw_content,
                 metadata={
                     "url": result.get("url", ""),
-                    "thread_id": body.thread_id,
                     "favicon": result.get("favicon", ""),
                 },
             )
@@ -200,7 +199,7 @@ async def vectorize_url(
         # Initialize OpenAI embeddings
         embeddings = OpenAIEmbeddings(
             model="text-embedding-3-large",
-            dimensions=2000,  # Réduction de dimensions pour optimiser les coûts
+            dimensions=2000,
             openai_api_key=os.getenv("OPENAI_API_KEY")
         )
 
@@ -233,24 +232,11 @@ async def vectorize_url(
 @app.post("/delete_vector_store")
 async def delete_vector_store(body: DeleteVectorStoreRequest):
     """
-    Delete all documents and checkpoints for a specific thread_id from PostgreSQL/Supabase
+    Delete conversation history (checkpoints) for a specific thread_id.
+    Note: Ne supprime PAS les documents vectorisés (base de connaissance publique partagée)
     """
     try:
-        # Delete vectorized documents from langchain_pg_embedding using metadata filter
-        # First, get the collection name
-        collection_name = os.getenv("DOCUMENTS_COLLECTION", "crawled_documents")
-        
-        # Delete from langchain_pg_embedding where cmetadata contains thread_id
-        # Using raw SQL via supabase
-        result_docs = supabase.rpc(
-            'delete_documents_by_thread',
-            {
-                'collection_name_param': collection_name,
-                'thread_id_param': body.thread_id
-            }
-        ).execute()
-        
-        # Delete checkpoints
+        # Delete checkpoints (historique conversationnel)
         checkpoints_table = "langgraph_checkpoints"
         result_checkpoints = supabase.table(checkpoints_table) \
             .delete() \
@@ -269,15 +255,13 @@ async def delete_vector_store(body: DeleteVectorStoreRequest):
             print(f"Warning: Could not delete from checkpoint_writes: {e}")
             writes_count = 0
 
-        docs_count = result_docs.data if result_docs.data else 0
         checkpoints_count = len(result_checkpoints.data) if result_checkpoints.data else 0
 
         return JSONResponse(
             content={
                 "success": True,
-                "message": f"Deleted documents for thread_id '{body.thread_id}'",
+                "message": f"Deleted conversation history for thread_id '{body.thread_id}'",
                 "deleted_counts": {
-                    "documents": docs_count,
                     "checkpoints": checkpoints_count,
                     "checkpoint_writes": writes_count,
                 },
