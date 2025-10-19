@@ -14,16 +14,29 @@ from langchain.schema import HumanMessage
 def validate_context(state:Dict)->Dict:
     """Validate if the question is about Togolese administrative procedures using the LLM.
     This node checks if the user's question is relevant to administrative procedures in Togo.
+    IMPORTANT: Validation is only done for the FIRST message. Follow-up questions are automatically accepted.
     Args:
         state (Dict): The current state containing messages from user
     Returns:
         Dict with key "is_valid_domain" (bool) and "domain_check_message" (str).
     """
 
-    # Extraire la dernière question utilisateur
+    # Extraire tous les messages
     messages = state.get("messages", [])
     if not messages:
         return {"is_valid_domain": True}
+    
+    # Compter les messages utilisateur (HumanMessage seulement)
+    from langchain_core.messages import HumanMessage
+    user_messages = [msg for msg in messages if isinstance(msg, HumanMessage)]
+    
+    # Si ce n'est pas le premier message utilisateur, accepter automatiquement (question de suivi)
+    if len(user_messages) > 1:
+        print(f"✓ Question de suivi détectée (message {len(user_messages)}) - ACCEPTÉE automatiquement")
+        return {"is_valid_domain": True}
+    
+    # Pour le premier message, valider le domaine
+    print(f"→ Premier message détecté - Validation du domaine en cours...")
     
     last_message = messages[-1]
     question = last_message.content if hasattr(last_message, 'content') else str(last_message)
@@ -110,10 +123,10 @@ Réponds UNIQUEMENT par "oui" si la question est valide, "non" si hors-sujet."""
         is_valid = any(word in answer for word in ["oui", "yes", "valide", "valid"])
         
         if is_valid:
-            print(f" Question VALIDE (domaine administratif)")
+            print(f"✓ PREMIER MESSAGE VALIDE (domaine administratif)")
             return {"is_valid_domain": True}
         else:
-            print(f" Question HORS-SUJET (domaine: {answer})")
+            print(f"✗ PREMIER MESSAGE HORS-SUJET (domaine: {answer})")
             
             # Message poli de refus
             refusal_message = """Désolé, je suis **Dagan**, assistant spécialisé dans les **procédures administratives et services publics togolais** 🇹🇬
@@ -141,6 +154,6 @@ Ta question ne semble pas concerner ces domaines administratifs. Peux-tu reformu
             }
     
     except Exception as e:
-        print(f" Erreur validation domaine: {e}")
+        print(f"✗ Erreur validation domaine: {e}")
         # En cas d'erreur, on laisse passer pour éviter de bloquer
         return {"is_valid_domain": True}

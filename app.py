@@ -476,18 +476,13 @@ async def crag_stream(
                         docs_count = len(node_output.get("documents", []))
                         final_documents_count = docs_count
                         
-                        # Capturer les sources des documents récupérés
-                        for i, doc in enumerate(node_output.get("documents", [])):
-                            relevance_score = 1.0 - (i * 0.05)
-                            title = doc.page_content.split('\n')[0][:100] if doc.page_content else "Document"
-                            
+                        # Capturer les sources des documents récupérés - MÊME FORMAT que crag/query
+                        for doc in node_output.get("documents", []):
                             collected_sources.append({
-                                "type": "vectorstore",
-                                "title": title,
-                                "url": doc.metadata.get("source", doc.metadata.get("url")),
-                                "content": doc.page_content[:500],
-                                "relevance_score": relevance_score,
-                                "metadata": doc.metadata
+                                "url": doc.metadata.get("url", ""),
+                                "favicon": doc.metadata.get("favicon", ""),
+                                "is_official": doc.metadata.get("is_official", False),
+                                "reliability_score": doc.metadata.get("reliability_score", 0.0)
                             })
                         
                         yield (
@@ -577,19 +572,13 @@ async def crag_stream(
                         docs_count = len(node_output.get("documents", []))
                         final_documents_count = docs_count
                         
-                        # Capturer les sources web (Tavily) avec url et favicon
-                        for i, doc in enumerate(node_output.get("documents", [])):
+                        # Capturer les sources web (Tavily) - MÊME FORMAT que crag/query
+                        for doc in node_output.get("documents", []):
                             collected_sources.append({
-                                "type": "web",
                                 "url": doc.metadata.get("url", ""),
                                 "favicon": doc.metadata.get("favicon", ""),
-                                "content": doc.page_content[:500],
                                 "is_official": doc.metadata.get("is_official", False),
-                                "reliability_score": doc.metadata.get("reliability_score", 0.5),
-                                "metadata": {
-                                    **doc.metadata,
-                                    "search_engine": "tavily"
-                                }
+                                "reliability_score": doc.metadata.get("reliability_score", 0.0)
                             })
                         
                         yield (
@@ -674,15 +663,22 @@ async def crag_stream(
                 # Sauvegarder les sources
                 if message_id and collected_sources:
                     for source in collected_sources:
+                        # Adapter les champs disponibles pour la sauvegarde
+                        # Les sources ont maintenant: url, favicon, is_official, reliability_score
+                        source_type = "web" if source.get("url", "").startswith("http") else "document"
+                        source_title = source.get("url", "").split("/")[-1] if source.get("url") else "Source"
+                        
                         await save_information_source(
                             thread_id=thread_id,
                             message_id=message_id,
-                            source_type=source["type"],
-                            source_title=source["title"],
+                            source_type=source_type,
+                            source_title=source_title,
                             source_url=source.get("url"),
-                            source_content=source.get("content"),
-                            relevance_score=source.get("relevance_score"),
-                            metadata=source.get("metadata", {})
+                            relevance_score=source.get("reliability_score"),
+                            metadata={
+                                "is_official": source.get("is_official", False),
+                                "favicon": source.get("favicon", "")
+                            }
                         )
             
             yield (

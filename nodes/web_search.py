@@ -66,8 +66,8 @@ def web_search(state:Dict)->Dict:
             search_depth="advanced",
             country="togo",
             include_favicon=True,
-            include_answer="basic",
-            include_raw_content="markdown",
+            #include_answer="advanced",
+            include_raw_content="text",
             chunks_per_source=2,
             include_domains=TRUSTED_DOMAINS[:5]
         )
@@ -107,7 +107,7 @@ def web_search(state:Dict)->Dict:
                 metadata={
                     "url": url,
                     "favicon": favicon,
-                    "source": "tavily_web_search",
+                    "source": url,
                     "reliability_score": reliability_score,
                     "is_official": is_official
                 }
