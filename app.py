@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from langchain.schema import Document, HumanMessage
 from langchain_postgres import PGVector
 from langchain_openai import OpenAIEmbeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from pydantic import BaseModel
 from tavily import TavilyClient
@@ -169,41 +170,84 @@ async def vectorize_url(
 ):
     """
     Vectorize a URL by crawling it and creating embeddings in PostgreSQL
-    This endpoint reads the Tavily API key from the environment variable `TAVILY_API_KEY`.
+    with intelligent chunking (overlap between chunks for better context).
+    
+    Process:
+    1. Crawl URL with Tavily (get raw content + favicon)
+    2. Split content into chunks with overlap (RecursiveCharacterTextSplitter)
+    3. Vectorize each chunk with OpenAI embeddings
+    4. Store in PGVector with metadata (url, favicon, chunk_index, chunk_count)
     """
     try:
         tavily_api_key = os.getenv("TAVILY_API_KEY")
         tavily_client = TavilyClient(api_key=tavily_api_key)
+        
+        # 1. Crawl URL
         crawl_result = tavily_client.crawl(
-            url=body.url, format="text", include_favicon=True,limit=4
+            url=body.url, format="text", include_favicon=True, limit=4
         )
 
-        documents = []
+        # 2. Combine all content from Tavily results
+        combined_content = ""
+        url_favicon_map = {}
+        
         for result in crawl_result["results"]:
             raw_content = result.get("raw_content")
-            if not raw_content:  # Skip if None, empty string, or falsy
-                continue
+            url = result.get("url", "")
+            favicon = result.get("favicon", "")
             
+            if raw_content:
+                combined_content += raw_content + "\n\n"
+                url_favicon_map[url] = favicon
+        
+        if not combined_content.strip():
+            raise HTTPException(status_code=400, detail="No content found to vectorize")
+        
+        # 3. Split content into chunks with overlap
+        # chunk_size=1000 tokens ≈ 4000 characters
+        # overlap=200 tokens ≈ 800 characters
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=4000,           # ~1000 tokens
+            chunk_overlap=800,         # ~200 tokens overlap
+            separators=["\n\n", "\n", ".", " ", ""],  # Smart separators
+            length_function=len
+        )
+        
+        chunks = text_splitter.split_text(combined_content)
+        
+        if not chunks:
+            raise HTTPException(status_code=400, detail="No chunks generated from content")
+        
+        print(f"✓ {len(chunks)} chunks générés avec overlap (size=4000, overlap=800)")
+        
+        # 4. Create documents from chunks with metadata
+        documents = []
+        primary_url = body.url
+        primary_favicon = url_favicon_map.get(primary_url, "")
+        
+        for chunk_index, chunk_content in enumerate(chunks):
             doc = Document(
-                page_content=raw_content,
+                page_content=chunk_content,
                 metadata={
-                    "url": result.get("url", ""),
-                    "favicon": result.get("favicon", ""),
-                },
+                    "url": primary_url,
+                    "favicon": primary_favicon,
+                    "chunk_index": chunk_index,
+                    "chunk_count": len(chunks),
+                    "chunk_size": len(chunk_content)
+                }
             )
             documents.append(doc)
+        
+        print(f"✓ {len(documents)} documents créés avec métadonnées de chunks")
 
-        if not documents:
-            raise HTTPException(status_code=400, detail="No content found to vectorize")
-
-        # Initialize OpenAI embeddings
+        # 5. Initialize OpenAI embeddings
         embeddings = OpenAIEmbeddings(
             model="text-embedding-3-large",
             dimensions=2000,
             openai_api_key=os.getenv("OPENAI_API_KEY")
         )
 
-        # Use PGVector for PostgreSQL/Supabase
+        # 6. Use PGVector for PostgreSQL/Supabase
         collection_name = os.getenv("DOCUMENTS_COLLECTION", "crawled_documents")
         
         vector_store = PGVector(
@@ -213,15 +257,20 @@ async def vectorize_url(
             use_jsonb=True
         )
         
-        # Add documents with their IDs
+        # 7. Add documents with their IDs
         uuids = [str(uuid4()) for _ in range(len(documents))]
         vector_store.add_documents(documents, ids=uuids)
 
         return JSONResponse(
             content={
                 "success": True,
-                "message": f"Successfully vectorized {len(documents)} documents from {body.url}",
+                "message": f"Successfully vectorized {len(documents)} chunks from {body.url}",
                 "documents_count": len(documents),
+                "chunks_info": {
+                    "chunk_size": 4000,
+                    "chunk_overlap": 800,
+                    "total_chunks": len(chunks)
+                }
             }
         )
 
@@ -531,7 +580,7 @@ async def crag_stream(
                     # ─────────────────────────────────────────────────
                     elif node_name == "decide_to_generate":
                         docs_count = len(node_output.get("documents", []))
-                        decision = "generate" if docs_count > 0 else "web_search"
+                        decision = "generate" if docs_count >= 2 else "web_search"
                         
                         yield (
                             json.dumps({
@@ -572,7 +621,7 @@ async def crag_stream(
                         docs_count = len(node_output.get("documents", []))
                         final_documents_count = docs_count
                         
-                        # Capturer les sources web (Tavily) - MÊME FORMAT que crag/query
+                        # Capturer les sources web
                         for doc in node_output.get("documents", []):
                             collected_sources.append({
                                 "url": doc.metadata.get("url", ""),
