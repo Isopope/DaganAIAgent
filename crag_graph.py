@@ -1,31 +1,28 @@
 """
-CRAG (Corrective RAG) Implementation
-Architecture: RETRIEVE → GRADE → DECIDE → (GENERATE | TRANSFORM → WEB_SEARCH → GENERATE)
+Agent RAG Graph Implementation
+Architecture: START → VALIDATE_DOMAIN → AGENT_RAG → END
+
+L'agent ReAct utilise deux tools :
+- vector_search_tool : Recherche vectorielle avec cosine similarity (threshold=0.8)
+- web_search_tool : Recherche web Tavily avec focus Togo
+
+L'agent décide lui-même quand utiliser chaque tool via ReAct loop.
 """
 import os
 import logging
-from typing import List, Literal, Annotated
+from typing import List, Literal
 from typing_extensions import TypedDict
-from datetime import datetime
 
 from langchain.schema import Document
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_postgres import PGVector
+from langchain_core.messages import BaseMessage
 from langgraph.graph import StateGraph, START, END, MessagesState
-from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import InMemorySaver
 
-# Import des nodes CRAG (on n'a plus besoin de contextualize_question)
-from nodes import (
-    retrieve,
-    grade_documents,
-    decide_to_generate,
-    transform_query,
-    web_search,
-    generate
-)
+# Import du node de validation de domaine (inchangé)
 from nodes.validate_context import validate_context as validate_domain
+
+# Import du nouveau node agent
+from nodes.agent_rag import agent_rag
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -35,125 +32,108 @@ logger = logging.getLogger(__name__)
 # --- GraphState Definition ---
 class GraphState(MessagesState):
     """
-    État du graph CRAG - hérite de MessagesState pour la gestion automatique de l'historique
+    État du graph Agent RAG - hérite de MessagesState pour la gestion automatique de l'historique
     
     Attributes:
         messages: Historique des messages (géré automatiquement par MessagesState)
-        documents: Liste de documents récupérés (filtrée par gradeDocuments, enrichie par webSearch)
-        generation: Réponse finale du LLM (optionnel, pour compatibilité)
-        transformed_question: Question reformulée par transform_query (pour web_search)
         is_valid_domain: Indicateur si la question concerne le domaine administratif togolais
-        domain_check_message: Message de refus si question hors-sujet
+        domain_check_message: Message de refus si question hors-sujet (optionnel)
     """
-    documents: List[Document]
-    generation: str
-    transformed_question: str
     is_valid_domain: bool
     domain_check_message: str
 
 
-# --- Build CRAG Graph ---
-def build_crag_graph(checkpointer=None):
+# --- Build Agent RAG Graph ---
+def build_agent_graph(checkpointer=None):
     """
-    Construit et compile le workflow CRAG complet avec support du checkpointer
+    Construit et compile le workflow Agent RAG avec architecture pure :
+    START → VALIDATE_DOMAIN → AGENT_RAG → END
+    
+    L'agent décide lui-même quand utiliser vector_search ou web_search via ReAct loop.
        
     Args:
-        checkpointer: Checkpointer MongoDB pour la persistance de la mémoire
+        checkpointer: Checkpointer InMemory pour la mémoire conversationnelle
         
     Returns:
         Compiled StateGraph prêt à être invoqué
     """
-    print("\n=== Construction du CRAG Graph ===")
+    print("\n=== Construction du Agent RAG Graph ===")
     
-    # Initialiser le graph avec MessagesState
+    # Initialiser le graph avec GraphState (hérite de MessagesState)
     workflow = StateGraph(GraphState)
     
-    # Ajouter les nodes (avec validate_domain en premier)
+    # Ajouter les nodes (architecture simplifiée)
     workflow.add_node("validate_domain", validate_domain)
-    workflow.add_node("retrieve", retrieve)
-    workflow.add_node("grade_documents", grade_documents)
-    workflow.add_node("transform_query", transform_query)
-    workflow.add_node("web_search", web_search)
-    workflow.add_node("generate", generate)
+    workflow.add_node("agent_rag", agent_rag)
     
-    print("✓ Nodes ajoutés: validate_domain, retrieve, grade_documents, transform_query, web_search, generate")
+    print("✓ Nodes ajoutés: validate_domain, agent_rag")
     
     # Fonction pour décider après validation du domaine
-    def route_after_domain_check(state: GraphState) -> Literal["retrieve", "generate"]:
-        """Route vers retrieve si valide, sinon vers generate pour message de refus"""
+    def route_after_domain_check(state: GraphState) -> Literal["agent_rag", "__end__"]:
+        """
+        Route vers agent_rag si la question est valide, sinon termine directement.
+        Le message de refus est déjà ajouté par validate_domain dans les messages.
+        """
         if state.get("is_valid_domain", True):
-            return "retrieve"
+            return "agent_rag"
         else:
-            return "generate"
+            # Si hors-sujet, on termine (le message de refus est déjà dans state["messages"])
+            return "__end__"
     
-    # Définir les edges
+    # Définir les edges (architecture linéaire simple)
     # START → validate_domain
     workflow.add_edge(START, "validate_domain")
     
-    # validate_domain → [retrieve OU generate]
+    # validate_domain → [agent_rag OU END]
     workflow.add_conditional_edges(
         "validate_domain",
         route_after_domain_check,
         {
-            "retrieve": "retrieve",
-            "generate": "generate"
+            "agent_rag": "agent_rag",
+            "__end__": END
         }
     )
     
-    # retrieve → grade_documents
-    workflow.add_edge("retrieve", "grade_documents")
+    # agent_rag → END
+    workflow.add_edge("agent_rag", END)
     
-    # grade_documents → decide (conditional routing)
-    workflow.add_conditional_edges(
-        "grade_documents",
-        decide_to_generate,
-        {
-            "generate": "generate",
-            "transformQuery": "transform_query"
-        }
-    )
-    
-    # transform_query → web_search
-    workflow.add_edge("transform_query", "web_search")
-    
-    # web_search → generate
-    workflow.add_edge("web_search", "generate")
-    
-    # generate → END
-    workflow.add_edge("generate", END)
-    
-    print("✓ Edges configurés avec routing conditionnel + validation domaine")
+    print("✓ Edges configurés : START → validate_domain → agent_rag → END")
     
     # Compiler le graph avec ou sans checkpointer
     if checkpointer:
         app = workflow.compile(checkpointer=checkpointer)
-        print("✓ Graph compilé avec InMemorySaver checkpointer")
+        print("✓ Graph compilé avec InMemorySaver checkpointer unifié")
     else:
         app = workflow.compile()
-        print("✓ Graph compilé sans checkpointer (pas de mémoire persistante)")
+        print("✓ Graph compilé sans checkpointer (pas de mémoire)")
     
-    print("=== CRAG Graph prêt ===\n")
+    print("=== Agent RAG Graph prêt ===\n")
     
     return app
 
 
-# --- Graph instance globale avec InMemorySaver ---
-_crag_graph = None
-_crag_checkpointer = None
+# --- Graph instance globale avec InMemorySaver unifié ---
+_agent_graph = None
+_unified_checkpointer = None
 
 def get_crag_graph():
     """
-    Récupère l'instance du graph CRAG avec InMemorySaver (singleton pattern)
+    Récupère l'instance du graph Agent RAG avec InMemorySaver unifié (singleton pattern).
+    
+    Note : Le nom "get_crag_graph" est conservé pour compatibilité avec app.py,
+    mais le graph est maintenant un Agent RAG pur (pas CRAG traditionnel).
     
     Returns:
-        Compiled CRAG graph avec checkpointer InMemory
+        Compiled Agent RAG graph avec checkpointer InMemory unifié
     """
-    global _crag_graph, _crag_checkpointer
+    global _agent_graph, _unified_checkpointer
     
-    if _crag_graph is None:
-        # Créer un checkpointer InMemory pour la mémoire short-term
-        _crag_checkpointer = InMemorySaver()
-        _crag_graph = build_crag_graph(checkpointer=_crag_checkpointer)
+    if _agent_graph is None:
+        # Créer un checkpointer InMemory UNIFIÉ pour tout le système
+        # (graph + agent interne partagent le même checkpointer)
+        _unified_checkpointer = InMemorySaver()
+        _agent_graph = build_agent_graph(checkpointer=_unified_checkpointer)
+        print("✓ Checkpointer InMemory unifié créé (partagé graph + agent)")
     
-    return _crag_graph
+    return _agent_graph
 

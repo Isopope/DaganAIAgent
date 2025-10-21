@@ -23,104 +23,20 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain.schema import Document, HumanMessage
-from langchain_postgres import PGVector
-from langchain_openai import OpenAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from pydantic import BaseModel
 from tavily import TavilyClient
-from supabase import create_client, Client
+import psycopg2
+import numpy as np
+from openai import OpenAI
 
 from crag_graph import get_crag_graph
 
-# Supabase configuration
-supabase_url = os.getenv("SUPABASE_URL")
-supabase_key = os.getenv("SUPABASE_ANON_KEY")
+# Configuration PostgreSQL pour PGVector uniquement
 postgres_connection_string = os.getenv("POSTGRES_CONNECTION_STRING")
 
-# Initialize Supabase client
-supabase: Client = create_client(supabase_url, supabase_key)
 
-
-# Fonction pour enregistrer une conversation dans la table conversations
-async def save_conversation_message(
-    thread_id: str,
-    user_message: str,
-    assistant_message: str,
-    user_name: str = None,
-    metadata: dict = None
-):
-    """
-    Enregistre un échange utilisateur-assistant dans la table conversations
-    """
-    try:
-        # Récupérer le dernier message_order pour ce thread
-        response = supabase.table("conversations").select("message_order").eq("thread_id", thread_id).order("message_order", desc=True).limit(1).execute()
-        
-        # Calculer le prochain message_order
-        if response.data:
-            next_order = response.data[0]["message_order"] + 1
-        else:
-            next_order = 1
-        
-        # Insérer la conversation
-        conversation_data = {
-            "thread_id": thread_id,
-            "user_name": user_name,
-            "user_message": user_message,
-            "assistant_message": assistant_message,
-            "message_order": next_order,
-            "metadata": metadata or {}
-        }
-        
-        result = supabase.table("conversations").insert(conversation_data).execute()
-        message_id = result.data[0]["id"] if result.data else None
-        logging.info(f"✅ Conversation sauvegardée pour thread_id={thread_id}, order={next_order}, message_id={message_id}")
-        
-        return message_id
-    except Exception as e:
-        logging.error(f"❌ Erreur lors de la sauvegarde de la conversation: {e}")
-        return None
-
-
-async def save_information_source(
-    thread_id: str,
-    message_id: str,
-    source_type: str,
-    source_title: str,
-    source_url: str = None,
-    source_content: str = None,
-    relevance_score: float = None,
-    metadata: dict = None
-):
-    """
-    Enregistre une source d'information utilisée par Dagan
-    Types: 'web', 'document', 'vectorstore', 'memory'
-    """
-    try:
-        response = supabase.rpc(
-            "add_information_source",
-            {
-                "p_thread_id": thread_id,
-                "p_message_id": message_id,
-                "p_source_type": source_type,
-                "p_source_title": source_title,
-                "p_source_url": source_url,
-                "p_source_content": source_content,
-                "p_relevance_score": relevance_score,
-                "p_metadata": metadata or {}
-            }
-        ).execute()
-        
-        source_id = response.data if response.data else None
-        logging.info(f"✅ Source enregistrée: {source_type} - {source_title} (message_id={message_id})")
-        return source_id
-    except Exception as e:
-        logging.error(f"❌ Erreur lors de l'enregistrement de la source: {e}")
-        return None
-
-
-app = FastAPI(title="Dagan API", version="1.0.0")
+app = FastAPI(title="Dagan Agent RAG API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -133,21 +49,6 @@ app.add_middleware(
 @app.get("/health")
 async def health_check():
     return {"status": "everything is ok"}
-
-
-def get_agent():
-    return {
-        "agent": app.state.agent,
-    }
-
-
-class DeleteVectorStoreRequest(BaseModel):
-    thread_id: str
-
-
-class AgentRequest(BaseModel):
-    input: str
-    thread_id: str
 
 
 class VectorizeRequest(BaseModel):
@@ -175,7 +76,7 @@ async def vectorize_url(
     Process:
     1. Crawl URL with Tavily (get raw content + favicon)
     2. Split content into chunks with overlap (RecursiveCharacterTextSplitter)
-    3. Vectorize each chunk with OpenAI embeddings
+    3. Vectorize each chunk with OpenAI embeddings (direct API)
     4. Store in PGVector with metadata (url, favicon, chunk_index, chunk_count)
     """
     try:
@@ -240,26 +141,84 @@ async def vectorize_url(
         
         print(f"✓ {len(documents)} documents créés avec métadonnées de chunks")
 
-        # 5. Initialize OpenAI embeddings
-        embeddings = OpenAIEmbeddings(
-            model="text-embedding-3-large",
-            dimensions=2000,
-            openai_api_key=os.getenv("OPENAI_API_KEY")
-        )
-
-        # 6. Use PGVector for PostgreSQL/Supabase
+        # 5. Initialize OpenAI client for embeddings (direct API)
+        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        
+        # 6. Connect to PostgreSQL and create embeddings
+        conn = psycopg2.connect(postgres_connection_string)
+        cursor = conn.cursor()
+        
         collection_name = os.getenv("DOCUMENTS_COLLECTION", "crawled_documents")
         
-        vector_store = PGVector(
-            connection=postgres_connection_string,
-            embeddings=embeddings,
-            collection_name=collection_name,
-            use_jsonb=True
-        )
+        # Modifier la table existante pour changer collection_id de UUID à TEXT
+        # D'abord, vérifier si la table existe et si la colonne est de type UUID
+        cursor.execute("""
+            SELECT column_name, data_type 
+            FROM information_schema.columns 
+            WHERE table_name = 'langchain_pg_embedding' 
+            AND column_name = 'collection_id'
+        """)
+        column_info = cursor.fetchone()
         
-        # 7. Add documents with their IDs
+        if column_info and column_info[1] == 'uuid':
+            # La colonne existe et est de type UUID, on la modifie en TEXT
+            print("⚠️  Modification de la colonne collection_id (UUID → TEXT)...")
+            cursor.execute("""
+                ALTER TABLE langchain_pg_embedding 
+                ALTER COLUMN collection_id TYPE TEXT 
+                USING collection_id::TEXT
+            """)
+            conn.commit()
+            print("✅ Colonne collection_id modifiée en TEXT")
+        
+        # Create table if not exists (avec collection_id en TEXT)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS langchain_pg_embedding (
+                id TEXT PRIMARY KEY,
+                collection_id TEXT,
+                embedding VECTOR(2000),
+                document TEXT,
+                cmetadata JSONB
+            )
+        """)
+        
+        # Créer un index pour optimiser les recherches de similarité si pas existant
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS langchain_pg_embedding_embedding_idx 
+            ON langchain_pg_embedding 
+            USING ivfflat (embedding vector_cosine_ops)
+            WITH (lists = 100)
+        """)
+        
+        conn.commit()
+        
+        # 7. Generate embeddings and store in PGVector
         uuids = [str(uuid4()) for _ in range(len(documents))]
-        vector_store.add_documents(documents, ids=uuids)
+        
+        for i, (doc, doc_id) in enumerate(zip(documents, uuids)):
+            # Generate embedding using direct OpenAI API
+            response = openai_client.embeddings.create(
+                model="text-embedding-3-large",
+                input=doc.page_content,
+                dimensions=2000
+            )
+            embedding = response.data[0].embedding
+            
+            # Store in PGVector avec collection_name en TEXT
+            cursor.execute("""
+                INSERT INTO langchain_pg_embedding (id, collection_id, embedding, document, cmetadata)
+                VALUES (%s, %s, %s::vector, %s, %s)
+                ON CONFLICT (id) DO UPDATE 
+                SET embedding = EXCLUDED.embedding, 
+                    document = EXCLUDED.document, 
+                    cmetadata = EXCLUDED.cmetadata
+            """, (doc_id, collection_name, embedding, doc.page_content, json.dumps(doc.metadata)))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        print(f"✓ {len(documents)} documents vectorisés et stockés dans PGVector")
 
         return JSONResponse(
             content={
@@ -278,50 +237,7 @@ async def vectorize_url(
         raise HTTPException(status_code=500, detail=f"Error vectorizing URL: {str(e)}")
 
 
-@app.post("/delete_vector_store")
-async def delete_vector_store(body: DeleteVectorStoreRequest):
-    """
-    Delete conversation history (checkpoints) for a specific thread_id.
-    Note: Ne supprime PAS les documents vectorisés (base de connaissance publique partagée)
-    """
-    try:
-        # Delete checkpoints (historique conversationnel)
-        checkpoints_table = "langgraph_checkpoints"
-        result_checkpoints = supabase.table(checkpoints_table) \
-            .delete() \
-            .eq("thread_id", body.thread_id) \
-            .execute()
-        
-        # Delete checkpoint writes
-        checkpoint_writes_table = "langgraph_checkpoint_writes"
-        try:
-            result_writes = supabase.table(checkpoint_writes_table) \
-                .delete() \
-                .eq("thread_id", body.thread_id) \
-                .execute()
-            writes_count = len(result_writes.data) if result_writes.data else 0
-        except Exception as e:
-            print(f"Warning: Could not delete from checkpoint_writes: {e}")
-            writes_count = 0
 
-        checkpoints_count = len(result_checkpoints.data) if result_checkpoints.data else 0
-
-        return JSONResponse(
-            content={
-                "success": True,
-                "message": f"Deleted conversation history for thread_id '{body.thread_id}'",
-                "deleted_counts": {
-                    "checkpoints": checkpoints_count,
-                    "checkpoint_writes": writes_count,
-                },
-            }
-        )
-
-    except Exception as e:
-        print(f"Error in delete_vector_store: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail=f"Error deleting vector store: {str(e)}"
-        )
 
 
 @app.post("/crag/query")
@@ -330,17 +246,11 @@ async def crag_query(
     fastapi_request: Request,
 ):
     """
-    Endpoint pour tester le workflow CRAG complet avec mémoire conversationnelle
+    Endpoint pour tester le workflow Agent RAG complet avec mémoire conversationnelle
     
-    Le workflow CRAG:
-    1. RETRIEVE: Recherche documents pertinents dans MongoDB
-    2. GRADE: Évalue la pertinence des documents
-    3. DECIDE: Route vers génération ou web search
-    4. GENERATE: Génère la réponse avec historique conversationnel
-       OU
-    4a. TRANSFORM: Réécrit la question pour web search (avec contexte conversationnel)
-    4b. WEB_SEARCH: Recherche web avec Tavily
-    4c. GENERATE: Génère la réponse avec les résultats web
+    Le workflow Agent RAG:
+    1. VALIDATE_DOMAIN: Vérifie si la question concerne le domaine administratif togolais
+    2. AGENT_RAG: Agent ReAct qui utilise vector_search_tool et web_search_tool
     
     Args:
         body: CragQueryRequest avec question et conversation_id optionnel
@@ -353,70 +263,75 @@ async def crag_query(
         thread_id = body.conversation_id or str(uuid4())
         
         print(f"\n{'='*60}")
-        print(f"CRAG Query Request")
+        print(f"Agent RAG Query Request")
         print(f"{'='*60}")
         print(f"Question: {body.question}")
         print(f"Thread ID: {thread_id}")
         print(f"{'='*60}\n")
         
-        # Récupérer le graph CRAG (avec InMemorySaver intégré)
-        crag_graph = get_crag_graph()
+        # Récupérer le graph Agent RAG (avec InMemorySaver intégré)
+        agent_graph = get_crag_graph()
         
         # Préparer l'état initial avec MessagesState
         # On crée un HumanMessage avec la question
         initial_state = {
             "messages": [HumanMessage(content=body.question)],
-            "documents": [],
-            "generation": "",
-            "transformed_question": ""
+            "question": body.question,
+            "domain_validated": False
         }
         
         # Configuration pour le checkpointer (thread_id pour la mémoire)
         config = {"configurable": {"thread_id": thread_id}}
         
-        # Exécuter le workflow CRAG avec persistance de la mémoire (SYNC avec InMemorySaver)
-        final_state = crag_graph.invoke(initial_state, config)
+        # Exécuter le workflow Agent RAG avec persistance de la mémoire (SYNC avec InMemorySaver)
+        final_state = agent_graph.invoke(initial_state, config)
         
         print(f"\n{'='*60}")
-        print(f"CRAG Workflow Completed")
+        print(f"Agent RAG Workflow Completed")
         print(f"{'='*60}")
-        print(f"Documents récupérés: {len(final_state.get('documents', []))}")
-        print(f"Réponse générée: {len(final_state.get('generation', ''))} caractères")
+        print(f"Messages: {len(final_state.get('messages', []))}")
         print(f"{'='*60}\n")
         
-        # Construire la réponse avec métadonnées (url et favicon)
-        documents = final_state.get("documents", [])
+        # Extraire la réponse finale des messages
+        messages = final_state.get("messages", [])
+        final_answer = ""
         sources = []
         
-        for doc in documents:
-            source_metadata = {
-                "url": doc.metadata.get("url", ""),
-                "favicon": doc.metadata.get("favicon", ""),
-                "is_official": doc.metadata.get("is_official", False),
-                "reliability_score": doc.metadata.get("reliability_score", 0.0)
-            }
-            sources.append(source_metadata)
+        # Trouver le dernier AIMessage et extraire sources
+        for msg in reversed(messages):
+            if hasattr(msg, 'type') and msg.type == 'ai':
+                final_answer = msg.content
+                # Extraire les sources des additional_kwargs si présentes
+                if hasattr(msg, 'additional_kwargs'):
+                    sources = msg.additional_kwargs.get("sources", [])
+                break
+        
+        # Si pas de réponse trouvée dans les messages, essayer l'ancien format
+        if not final_answer:
+            final_answer = final_state.get("response", "Aucune réponse générée")
         
         response_data = {
             "success": True,
             "conversation_id": thread_id,
             "question": body.question,
-            "answer": final_state.get("generation", ""),
+            "answer": final_answer,
+            "sources": sources,  # Liste complète des sources avec URLs
             "metadata": {
-                "documents_count": len(documents),
-                "sources": sources
+                "workflow": "agent_rag",
+                "messages_count": len(messages),
+                "sources_count": len(sources)
             }
         }
         
         return JSONResponse(content=response_data)
         
     except Exception as e:
-        print(f"❌ Erreur dans CRAG workflow: {str(e)}")
+        print(f"❌ Erreur dans Agent RAG workflow: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(
             status_code=500, 
-            detail=f"Error in CRAG workflow: {str(e)}"
+            detail=f"Error in Agent RAG workflow: {str(e)}"
         )
 
 
@@ -426,20 +341,14 @@ async def crag_stream(
     fastapi_request: Request,
 ):
     """
-    Endpoint CRAG avec streaming en temps réel (Server-Sent Events).
+    Endpoint Agent RAG avec streaming en temps réel (Server-Sent Events).
     
     Version streaming de /crag/query qui permet de suivre l'exécution
     du workflow node par node et de recevoir la réponse token par token.
     
-    Le workflow CRAG:
-    1. RETRIEVE: Recherche documents pertinents dans MongoDB
-    2. GRADE: Évalue la pertinence des documents
-    3. DECIDE: Route vers génération ou web search
-    4. GENERATE: Génère la réponse avec historique conversationnel (streaming)
-       OU
-    4a. TRANSFORM: Réécrit la question pour web search (avec contexte)
-    4b. WEB_SEARCH: Recherche web avec Tavily
-    4c. GENERATE: Génère la réponse avec résultats web (streaming)
+    Le workflow Agent RAG:
+    1. VALIDATE_DOMAIN: Vérifie si la question concerne le domaine administratif togolais
+    2. AGENT_RAG: Agent ReAct qui utilise vector_search_tool et web_search_tool
     
     Args:
         body: CragQueryRequest avec question et conversation_id optionnel
@@ -448,10 +357,11 @@ async def crag_stream(
         StreamingResponse avec events SSE (Server-Sent Events)
         
     Format des events:
-        - {"type": "node_start", "node": "retrieve"}
-        - {"type": "node_end", "node": "retrieve", "documents_count": 5}
-        - {"type": "message_chunk", "content": "...", "node": "generate"}
-        - {"type": "complete", "conversation_id": "...", "answer": "..."}
+        - {"type": "node_start", "node": "validate_domain"}
+        - {"type": "node_end", "node": "validate_domain", "is_valid": true}
+        - {"type": "node_start", "node": "agent_rag"}
+        - {"type": "message_chunk", "content": "...", "node": "agent_rag"}
+        - {"type": "complete", "conversation_id": "...", "answer": "...", "sources": [...]}
     """
     # No Authorization header required for streaming endpoint
     
@@ -462,21 +372,20 @@ async def crag_stream(
             thread_id = body.conversation_id or str(uuid4())
             
             print(f"\n{'='*60}")
-            print(f"🌊 CRAG Stream Request")
+            print(f"🌊 Agent RAG Stream Request")
             print(f"{'='*60}")
             print(f"Question: {body.question}")
             print(f"Thread ID: {thread_id}")
             print(f"{'='*60}\n")
             
-            # Récupérer le graph CRAG
-            crag_graph = get_crag_graph()
+            # Récupérer le graph Agent RAG
+            agent_graph = get_crag_graph()
             
-            # Préparer l'état initial
+            # Préparer l'état initial avec MessagesState
             initial_state = {
                 "messages": [HumanMessage(content=body.question)],
-                "documents": [],
-                "generation": "",
-                "transformed_question": ""
+                "question": body.question,
+                "domain_validated": False
             }
             
             # Configuration pour le checkpointer
@@ -484,11 +393,10 @@ async def crag_stream(
             
             # Variables pour accumuler la réponse et les sources
             accumulated_answer = ""
-            final_documents_count = 0
-            collected_sources = []  # Pour stocker les sources CRAG
+            collected_sources = []
             
-            # Streamer le workflow CRAG
-            async for event in crag_graph.astream(initial_state, config):
+            # Streamer le workflow Agent RAG
+            async for event in agent_graph.astream(initial_state, config):
                 # event est un dict avec une clé = nom du node
                 # et valeur = état retourné par ce node
                 
@@ -501,11 +409,20 @@ async def crag_stream(
                     if node_name == "validate_domain":
                         is_valid = node_output.get("is_valid_domain", True)
                         
+                        yield (
+                            json.dumps({
+                                "type": "node_start",
+                                "node": "validate_domain",
+                                "message": "🔍 Validation du domaine..."
+                            }) + "\n"
+                        )
+                        
                         if not is_valid:
                             yield (
                                 json.dumps({
                                     "type": "node_end",
                                     "node": "validate_domain",
+                                    "is_valid": False,
                                     "message": "❌ Question hors-sujet administratif"
                                 }) + "\n"
                             )
@@ -514,174 +431,53 @@ async def crag_stream(
                                 json.dumps({
                                     "type": "node_end",
                                     "node": "validate_domain",
+                                    "is_valid": True,
                                     "message": "✅ Question validée (domaine administratif)"
                                 }) + "\n"
                             )
                     
                     # ─────────────────────────────────────────────────
-                    # RETRIEVE node
+                    # AGENT_RAG node
                     # ─────────────────────────────────────────────────
-                    elif node_name == "retrieve":
-                        docs_count = len(node_output.get("documents", []))
-                        final_documents_count = docs_count
-                        
-                        # Capturer les sources des documents récupérés - MÊME FORMAT que crag/query
-                        for doc in node_output.get("documents", []):
-                            collected_sources.append({
-                                "url": doc.metadata.get("url", ""),
-                                "favicon": doc.metadata.get("favicon", ""),
-                                "is_official": doc.metadata.get("is_official", False),
-                                "reliability_score": doc.metadata.get("reliability_score", 0.0)
-                            })
-                        
+                    elif node_name == "agent_rag":
                         yield (
                             json.dumps({
                                 "type": "node_start",
-                                "node": "retrieve",
-                                "message": f"🔍 Recherche de documents pertinents..."
+                                "node": "agent_rag",
+                                "message": "🤖 Agent ReAct en cours d'exécution..."
                             }) + "\n"
                         )
                         
-                        yield (
-                            json.dumps({
-                                "type": "node_end",
-                                "node": "retrieve",
-                                "documents_count": docs_count,
-                                "message": f"✅ {docs_count} documents trouvés"
-                            }) + "\n"
-                        )
-                    
-                    # ─────────────────────────────────────────────────
-                    # GRADE_DOCUMENTS node
-                    # ─────────────────────────────────────────────────
-                    elif node_name == "grade_documents":
-                        docs_count = len(node_output.get("documents", []))
-                        final_documents_count = docs_count
+                        # Extraire la réponse et les sources du dernier AIMessage
+                        messages = node_output.get("messages", [])
                         
-                        yield (
-                            json.dumps({
-                                "type": "node_start",
-                                "node": "grade_documents",
-                                "message": "📝 Évaluation de la pertinence..."
-                            }) + "\n"
-                        )
-                        
-                        yield (
-                            json.dumps({
-                                "type": "node_end",
-                                "node": "grade_documents",
-                                "documents_count": docs_count,
-                                "message": f"✅ {docs_count} documents pertinents"
-                            }) + "\n"
-                        )
-                    
-                    # ─────────────────────────────────────────────────
-                    # DECIDE_TO_GENERATE node
-                    # ─────────────────────────────────────────────────
-                    elif node_name == "decide_to_generate":
-                        docs_count = len(node_output.get("documents", []))
-                        decision = "generate" if docs_count >= 2 else "web_search"
-                        
-                        yield (
-                            json.dumps({
-                                "type": "node_end",
-                                "node": "decide_to_generate",
-                                "decision": decision,
-                                "message": f"🎯 Route: {'Génération directe' if docs_count > 0 else 'Recherche web'}"
-                            }) + "\n"
-                        )
-                    
-                    # ─────────────────────────────────────────────────
-                    # TRANSFORM_QUERY node
-                    # ─────────────────────────────────────────────────
-                    elif node_name == "transform_query":
-                        transformed = node_output.get("transformed_question", "")
-                        
-                        yield (
-                            json.dumps({
-                                "type": "node_start",
-                                "node": "transform_query",
-                                "message": "🔄 Reformulation de la question..."
-                            }) + "\n"
-                        )
-                        
-                        yield (
-                            json.dumps({
-                                "type": "node_end",
-                                "node": "transform_query",
-                                "transformed_question": transformed,
-                                "message": f"✅ Question reformulée"
-                            }) + "\n"
-                        )
-                    
-                    # ─────────────────────────────────────────────────
-                    # WEB_SEARCH node
-                    # ─────────────────────────────────────────────────
-                    elif node_name == "web_search":
-                        docs_count = len(node_output.get("documents", []))
-                        final_documents_count = docs_count
-                        
-                        # Capturer les sources web
-                        for doc in node_output.get("documents", []):
-                            collected_sources.append({
-                                "url": doc.metadata.get("url", ""),
-                                "favicon": doc.metadata.get("favicon", ""),
-                                "is_official": doc.metadata.get("is_official", False),
-                                "reliability_score": doc.metadata.get("reliability_score", 0.0)
-                            })
-                        
-                        yield (
-                            json.dumps({
-                                "type": "node_start",
-                                "node": "web_search",
-                                "message": "🌐 Recherche web Tavily..."
-                            }) + "\n"
-                        )
-                        
-                        yield (
-                            json.dumps({
-                                "type": "node_end",
-                                "node": "web_search",
-                                "documents_count": docs_count,
-                                "message": f"✅ {docs_count} résultats trouvés"
-                            }) + "\n"
-                        )
-                    
-                    # ─────────────────────────────────────────────────
-                    # GENERATE node - STREAMING TOKEN PAR TOKEN
-                    # ─────────────────────────────────────────────────
-                    elif node_name == "generate":
-                        yield (
-                            json.dumps({
-                                "type": "node_start",
-                                "node": "generate",
-                                "message": "💬 Génération de la réponse..."
-                            }) + "\n"
-                        )
-                        
-                        # Le node generate retourne déjà la réponse complète
-                        # Pour du vrai streaming, il faudrait modifier le node generate
-                        # Pour l'instant, on envoie la réponse complète
-                        generation = node_output.get("generation", "")
-                        accumulated_answer = generation
+                        for msg in reversed(messages):
+                            if hasattr(msg, 'type') and msg.type == 'ai':
+                                accumulated_answer = msg.content
+                                
+                                # Extraire les sources des additional_kwargs
+                                if hasattr(msg, 'additional_kwargs'):
+                                    collected_sources = msg.additional_kwargs.get("sources", [])
+                                
+                                break
                         
                         # Simuler un streaming en envoyant par chunks
                         chunk_size = 50  # Caractères par chunk
-                        for i in range(0, len(generation), chunk_size):
-                            chunk = generation[i:i+chunk_size]
+                        for i in range(0, len(accumulated_answer), chunk_size):
+                            chunk = accumulated_answer[i:i+chunk_size]
                             yield (
                                 json.dumps({
                                     "type": "message_chunk",
                                     "content": chunk,
-                                    "node": "generate"
+                                    "node": "agent_rag"
                                 }) + "\n"
                             )
                         
                         yield (
                             json.dumps({
                                 "type": "node_end",
-                                "node": "generate",
-                                "message": "✅ Réponse générée"
+                                "node": "agent_rag",
+                                "message": f"✅ Réponse générée ({len(accumulated_answer)} caractères, {len(collected_sources)} sources)"
                             }) + "\n"
                         )
             
@@ -689,46 +485,11 @@ async def crag_stream(
             # EVENT FINAL - Workflow complet
             # ─────────────────────────────────────────────────────────
             print(f"\n{'='*60}")
-            print(f"✅ CRAG Stream Completed")
+            print(f"✅ Agent RAG Stream Completed")
             print(f"{'='*60}")
-            print(f"Documents: {final_documents_count}")
             print(f"Réponse: {len(accumulated_answer)} caractères")
             print(f"Sources: {len(collected_sources)}")
             print(f"{'='*60}\n")
-            
-            # Sauvegarder la conversation et les sources
-            if accumulated_answer:
-                message_id = await save_conversation_message(
-                    thread_id=thread_id,
-                    user_message=body.question,
-                    assistant_message=accumulated_answer,
-                    metadata={
-                        "api_endpoint": "crag_stream",
-                        "documents_count": final_documents_count,
-                        "sources_count": len(collected_sources)
-                    }
-                )
-                
-                # Sauvegarder les sources
-                if message_id and collected_sources:
-                    for source in collected_sources:
-                        # Adapter les champs disponibles pour la sauvegarde
-                        # Les sources ont maintenant: url, favicon, is_official, reliability_score
-                        source_type = "web" if source.get("url", "").startswith("http") else "document"
-                        source_title = source.get("url", "").split("/")[-1] if source.get("url") else "Source"
-                        
-                        await save_information_source(
-                            thread_id=thread_id,
-                            message_id=message_id,
-                            source_type=source_type,
-                            source_title=source_title,
-                            source_url=source.get("url"),
-                            relevance_score=source.get("reliability_score"),
-                            metadata={
-                                "is_official": source.get("is_official", False),
-                                "favicon": source.get("favicon", "")
-                            }
-                        )
             
             yield (
                 json.dumps({
@@ -736,9 +497,11 @@ async def crag_stream(
                     "conversation_id": thread_id,
                     "question": body.question,
                     "answer": accumulated_answer,
+                    "sources": collected_sources,  # ✅ SOURCES INCLUSES
                     "metadata": {
-                        "documents_count": final_documents_count,
-                        "sources_count": len(collected_sources)
+                        "workflow": "agent_rag",
+                        "sources_count": len(collected_sources),
+                        "answer_length": len(accumulated_answer)
                     }
                 }) + "\n"
             )
@@ -767,169 +530,10 @@ async def crag_stream(
     )
 
 
-@app.get("/conversations/{thread_id}")
-async def get_conversation(thread_id: str):
-    """
-    Récupère l'historique complet d'une conversation par thread_id
-    """
-    try:
-        response = supabase.rpc(
-            "get_conversation_history",
-            {"p_thread_id": thread_id}
-        ).execute()
-        
-        return {
-            "thread_id": thread_id,
-            "message_count": len(response.data),
-            "messages": response.data
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
-
-
-@app.get("/conversations/user/{user_name}")
-async def get_user_conversations(user_name: str, limit: int = 50):
-    """
-    Récupère toutes les conversations d'un utilisateur
-    """
-    try:
-        response = supabase.rpc(
-            "get_user_conversations",
-            {"p_user_name": user_name, "p_limit": limit}
-        ).execute()
-        
-        return {
-            "user_name": user_name,
-            "conversation_count": len(response.data),
-            "conversations": response.data
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
-
-
-@app.get("/conversations")
-async def list_all_conversations(limit: int = 100):
-    """
-    Liste toutes les conversations récentes (tous utilisateurs)
-    """
-    try:
-        response = supabase.table("conversations").select("*").order("created_at", desc=True).limit(limit).execute()
-        
-        # Grouper par thread_id
-        conversations_by_thread = {}
-        for msg in response.data:
-            thread_id = msg["thread_id"]
-            if thread_id not in conversations_by_thread:
-                conversations_by_thread[thread_id] = []
-            conversations_by_thread[thread_id].append(msg)
-        
-        return {
-            "total_messages": len(response.data),
-            "thread_count": len(conversations_by_thread),
-            "conversations": conversations_by_thread
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
-
-
-@app.delete("/conversations/{thread_id}")
-async def delete_conversation(thread_id: str):
-    """
-    Supprime une conversation complète
-    """
-    try:
-        response = supabase.rpc(
-            "delete_conversation",
-            {"p_thread_id": thread_id}
-        ).execute()
-        
-        deleted_count = response.data if response.data else 0
-        
-        return {
-            "message": f"Conversation supprimée",
-            "thread_id": thread_id,
-            "deleted_messages": deleted_count
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
-
-
-@app.get("/sources/message/{message_id}")
-async def get_message_sources(message_id: str):
-    """
-    Récupère toutes les sources utilisées pour un message spécifique
-    """
-    try:
-        response = supabase.rpc(
-            "get_message_sources",
-            {"p_message_id": message_id}
-        ).execute()
-        
-        return {
-            "message_id": message_id,
-            "source_count": len(response.data),
-            "sources": response.data
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
-
-
-@app.get("/sources/thread/{thread_id}")
-async def get_thread_sources(thread_id: str, limit: int = 50):
-    """
-    Récupère toutes les sources utilisées dans un thread
-    """
-    try:
-        response = supabase.rpc(
-            "get_thread_sources",
-            {"p_thread_id": thread_id, "p_limit": limit}
-        ).execute()
-        
-        return {
-            "thread_id": thread_id,
-            "source_count": len(response.data),
-            "sources": response.data
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
-
-
-@app.get("/conversations/{thread_id}/with-sources")
-async def get_conversation_with_sources(thread_id: str):
-    """
-    Récupère une conversation complète avec toutes ses sources
-    Format enrichi similaire à ChatGPT
-    """
-    try:
-        # Récupérer la conversation
-        conv_response = supabase.rpc(
-            "get_conversation_history",
-            {"p_thread_id": thread_id}
-        ).execute()
-        
-        # Pour chaque message, récupérer ses sources
-        enriched_messages = []
-        for msg in conv_response.data:
-            sources_response = supabase.rpc(
-                "get_message_sources",
-                {"p_message_id": msg["id"]}
-            ).execute()
-            
-            enriched_messages.append({
-                **msg,
-                "sources": sources_response.data
-            })
-        
-        return {
-            "thread_id": thread_id,
-            "message_count": len(enriched_messages),
-            "messages": enriched_messages
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
-
-
-
+# ============================================================================
+# NOTE : Endpoints /conversations/* et /sources/* SUPPRIMÉS
+# Pas de persistence Supabase - Seulement InMemorySaver pour mémoire volatile
+# ============================================================================
 
 
 if __name__ == "__main__":

@@ -2,16 +2,11 @@
 Node VALIDATE_CONTEXT - Valide que la question concerne les procédures administratives togolaises
 """
 
-"""
-Node VALIDATE_CONTEXT - Validates that the question concerns Togolese administrative procedures
-"""
-
 import os
 from typing import Dict
-from langchain_openai import ChatOpenAI
-from langchain.schema import HumanMessage
+from openai import OpenAI
 
-def validate_context(state:Dict)->Dict:
+def validate_context(state: Dict) -> Dict:
     """Validate if the question is about Togolese administrative procedures using the LLM.
     This node checks if the user's question is relevant to administrative procedures in Togo.
     IMPORTANT: Validation is only done for the FIRST message. Follow-up questions are automatically accepted.
@@ -41,14 +36,9 @@ def validate_context(state:Dict)->Dict:
     last_message = messages[-1]
     question = last_message.content if hasattr(last_message, 'content') else str(last_message)
     
-    # Configuration LLM
-    llm_model = os.getenv("LLM_MODEL", "gpt-4.1-nano")
-    
-    llm = ChatOpenAI(
-        model=llm_model,
-        temperature=0,
-        openai_api_key=os.getenv("OPENAI_API_KEY")
-    )
+    # Configuration LLM - API directe OpenAI
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    llm_model = os.getenv("LLM_MODEL", "gpt-4o-mini")
     
     # Prompt de validation du domaine
     validation_prompt = f"""Tu es un système de validation pour un assistant togolais sur les procédures administratives et services publics.
@@ -117,18 +107,24 @@ Question: {question}
 Réponds UNIQUEMENT par "oui" si la question est valide, "non" si hors-sujet."""
 
     try:
-        response = llm.invoke(validation_prompt)
-        answer = response.content.strip().lower()
+        # Appel API OpenAI direct
+        response = client.chat.completions.create(
+            model=llm_model,
+            temperature=0,
+            messages=[{"role": "user", "content": validation_prompt}]
+        )
+        answer = response.choices[0].message.content.strip().lower()
         
-        is_valid = any(word in answer for word in ["oui", "yes", "valide", "valid"])
+        print(f"🔍 Validation domaine - Question: '{question[:50]}...'")
+        print(f"🔍 Réponse LLM: '{answer}'")
         
-        if is_valid:
-            print(f"✓ PREMIER MESSAGE VALIDE (domaine administratif)")
+        # Vérifier si la réponse est positive
+        if "oui" in answer or "yes" in answer:
+            print("✓ Question ACCEPTÉE - domaine valide")
             return {"is_valid_domain": True}
         else:
-            print(f"✗ PREMIER MESSAGE HORS-SUJET (domaine: {answer})")
-            
             # Message poli de refus
+            print("✗ Question REFUSÉE - hors domaine")
             refusal_message = """Désolé, je suis **Dagan**, assistant spécialisé dans les **procédures administratives et services publics togolais** 🇹🇬
 
 Je peux t'aider dans ces domaines :
