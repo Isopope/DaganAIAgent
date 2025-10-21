@@ -115,7 +115,7 @@ def web_search_tool(query: str) -> dict:
         
         # 4. RERANKING avec LLM pour améliorer la pertinence et prioriser sources officielles
         if len(processed_results) > 5:
-            print(f"🔄 Reranking de {len(processed_results)} résultats web...")
+            print(f"Reranking de {len(processed_results)} résultats web...")
             processed_results = rerank_web_results(query, processed_results, top_k=5)
         else:
             # Si peu de résultats, juste trier par reliability score
@@ -130,7 +130,7 @@ def web_search_tool(query: str) -> dict:
                 "answer": search_results.get("answer", ""),
                 "reranked": True if len(processed_results) > 0 and "rerank_score" in processed_results[0] else False,
                 "sources": processed_results,  # Liste complète des sources avec URLs (reranked)
-                "summary": f"🌐 Trouvé {len(processed_results)} résultat(s) web pertinent(s) pour '{query}' (reranked)"
+                "summary": f" Trouvé {len(processed_results)} résultat(s) web pertinent(s) pour '{query}' (reranked)"
             }
         else:
             return {
@@ -138,7 +138,7 @@ def web_search_tool(query: str) -> dict:
                 "query": query,
                 "result_count": 0,
                 "sources": [],
-                "summary": f"❌ Aucun résultat web trouvé pour '{query}'"
+                "summary": f" Aucun résultat web trouvé pour '{query}'"
             }
         
     except Exception as e:
@@ -147,6 +147,6 @@ def web_search_tool(query: str) -> dict:
             "query": query,
             "error": str(e),
             "sources": [],
-            "summary": f"❌ Erreur lors de la recherche web: {str(e)}"
+            "summary": f" Erreur lors de la recherche web: {str(e)}"
         }
 

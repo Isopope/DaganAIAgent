@@ -1,10 +1,20 @@
 """
-Agent RAG Graph Implementation
+🤖 AGENTIC RAG Graph Implementation (Legacy name: "CRAG")
 Architecture: START → VALIDATE_DOMAIN → AGENT_RAG → END
 
+⚠️ NOTE IMPORTANTE : Ce système est un **Agentic RAG** (Agent-based RAG), PAS un CRAG.
+Le nom "CRAG" dans le code est historique/legacy et conservé pour compatibilité.
+
+DIFFÉRENCES vs CRAG traditionnel :
+- ❌ Pas de pipeline fixe RETRIEVE → GRADE → DECIDE
+- ❌ Pas de correction conditionnelle binaire (if/else)
+- ✅ Agent ReAct autonome qui décide de sa stratégie
+- ✅ Tools à disposition (pas nodes obligatoires)
+- ✅ Reasoning loop adaptatif et non déterministe
+
 L'agent ReAct utilise deux tools :
-- vector_search_tool : Recherche vectorielle avec cosine similarity (threshold=0.8)
-- web_search_tool : Recherche web Tavily avec focus Togo
+- vector_search_tool : Recherche vectorielle avec cosine similarity (threshold=0.8) + reranking LLM
+- web_search_tool : Recherche web Tavily avec focus Togo + reranking LLM
 
 L'agent décide lui-même quand utiliser chaque tool via ReAct loop.
 """
@@ -120,8 +130,11 @@ def get_crag_graph():
     """
     Récupère l'instance du graph Agent RAG avec InMemorySaver unifié (singleton pattern).
     
-    Note : Le nom "get_crag_graph" est conservé pour compatibilité avec app.py,
-    mais le graph est maintenant un Agent RAG pur (pas CRAG traditionnel).
+    ⚠️ LEGACY NAME : Le nom "get_crag_graph" est conservé pour compatibilité,
+    mais ce système est en réalité un **Agentic RAG** (Agent-based RAG), pas un CRAG.
+    
+    Architecture actuelle : Agent ReAct autonome qui décide lui-même de sa stratégie
+    (pas de pipeline RETRIEVE → GRADE → DECIDE fixe comme dans CRAG classique)
     
     Returns:
         Compiled Agent RAG graph avec checkpointer InMemory unifié

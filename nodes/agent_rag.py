@@ -71,7 +71,7 @@ def agent_rag(state: Dict) -> Dict:
     messages = state.get("messages", [])
     is_valid_domain = state.get("is_valid_domain", True)
     
-    # Extraire la dernière question utilisateur
+    #extraire la dernière question utilisateur
     from langchain_core.messages import HumanMessage as LangchainHumanMessage
     user_messages = [msg for msg in messages if isinstance(msg, LangchainHumanMessage)]
     
@@ -80,7 +80,7 @@ def agent_rag(state: Dict) -> Dict:
         return {"messages": [error_message]}
     
     question = user_messages[-1].content
-    print(f"📝 Question extraite: '{question}'")
+    print(f" Question extraite: '{question}'")
     
     if not is_valid_domain:
         # Ajouter un message d'erreur aux messages existants
@@ -93,7 +93,7 @@ def agent_rag(state: Dict) -> Dict:
         error_message = AIMessage(content="Erreur: OPENAI_API_KEY non configuré")
         return {"messages": [error_message]}
     
-    print("🤖 Initialisation de l'agent ReAct avec tools...")
+    print(" Initialisation de l'agent ReAct avec tools...")
     
     # Créer LLM wrapper
     llm = OpenAILLM(api_key=api_key, model="gpt-4o-mini", temperature=0.7)
@@ -164,7 +164,7 @@ Final Answer: [Ta réponse complète structurée ici]
     # Fonction de gestion personnalisée des erreurs de parsing
     def handle_parsing_error(error) -> str:
         """Extrait la réponse de l'agent même si le format ReAct n'est pas parfait"""
-        print(f"⚠️  Erreur de parsing détectée, tentative de récupération...")
+        print(f"  Erreur de parsing détectée, tentative de récupération...")
         error_str = str(error)
         
         # Chercher la réponse générée dans l'erreur
@@ -175,10 +175,10 @@ Final Answer: [Ta réponse complète structurée ici]
                 end_idx = error_str.rfind("`")
                 if start_idx > 0 and end_idx > start_idx:
                     response = error_str[start_idx:end_idx]
-                    print(f"✅ Réponse extraite avec succès ({len(response)} caractères)")
+                    print(f" Réponse extraite avec succès ({len(response)} caractères)")
                     return f"Final Answer: {response}"
             except Exception as e:
-                print(f"❌ Échec de l'extraction: {e}")
+                print(f" Échec de l'extraction: {e}")
         
         return "Final Answer: Je n'ai pas pu générer une réponse correctement formatée. Peux-tu reformuler ta question ?"
     
@@ -188,33 +188,33 @@ Final Answer: [Ta réponse complète structurée ici]
         llm=llm,
         agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
         verbose=True,
-        max_iterations=5,  # Augmenté de 3 à 5 pour permettre plus de recherches
-        handle_parsing_errors=handle_parsing_error,  # Fonction personnalisée
+        max_iterations=5,  
+        handle_parsing_errors=handle_parsing_error, 
         agent_kwargs=agent_kwargs,
-        early_stopping_method="generate",  # Force une réponse même si max_iterations atteint
-        return_intermediate_steps=True  # Important pour extraire les sources
+        early_stopping_method="generate",  # forcer une réponse même si max_iterations atteint
+        return_intermediate_steps=True  # important pour extraire les sources
     )
     
     try:
-        print(f"🚀 Exécution de l'agent avec question: '{question[:50]}...'")
+        print(f" Exécution de l'agent avec question: '{question[:50]}...'")
         
-        # Construire le contexte conversationnel pour les questions de suivi
+        # construire le contexte conversationnel pour les questions de suivi
         conversation_context = ""
         if len(user_messages) > 1:
             # Il y a des messages précédents - construire le contexte
-            print(f"📜 Détection de {len(user_messages)} messages utilisateur - contexte conversationnel activé")
+            print(f" Détection de {len(user_messages)} messages utilisateur - contexte conversationnel activé")
             conversation_context = "\n\n**CONTEXTE DE LA CONVERSATION :**\n"
-            for i, msg in enumerate(user_messages[:-1], 1):  # Exclure le dernier (question actuelle)
+            for i, msg in enumerate(user_messages[:-1], 1):  
                 conversation_context += f"Message {i}: {msg.content}\n"
             conversation_context += f"\nQuestion actuelle (suite de la conversation) : {question}\n"
             
-            # Enrichir la question avec le contexte
+            # enrichir la question avec le contexte
             enriched_question = f"{conversation_context}\nRéponds à la question actuelle en tenant compte du contexte de la conversation."
         else:
-            print("📝 Premier message - pas de contexte conversationnel")
+            print(" Premier message - pas de contexte conversationnel")
             enriched_question = question
         
-        # Exécuter l'agent avec invoke (méthode recommandée)
+        # exécuter l'agent avec invoke (méthode recommandée)
         result = agent_executor.invoke({"input": enriched_question})
         
         # Extraire la réponse (invoke retourne un dict avec 'output')
@@ -237,7 +237,7 @@ Final Answer: [Ta réponse complète structurée ici]
         
         print(f"✅ Agent terminé - Réponse: {len(answer)} caractères, Sources: {len(sources)}")
         
-        # Créer un AIMessage avec la réponse ET les sources en metadata
+        # créer un AIMessage avec la réponse ET les sources en metadata
         ai_message = AIMessage(
             content=answer,
             additional_kwargs={"sources": sources}  # Stocker les sources dans les metadata
@@ -247,9 +247,9 @@ Final Answer: [Ta réponse complète structurée ici]
         return {"messages": [ai_message]}
         
     except Exception as e:
-        print(f"❌ Erreur dans l'agent: {str(e)}")
+        print(f" Erreur dans l'agent: {str(e)}")
         import traceback
         traceback.print_exc()
-        # En cas d'erreur, ajouter un message d'erreur
+        # en cas d'erreur
         error_message = AIMessage(content=f"Erreur dans l'agent: {str(e)}")
         return {"messages": [error_message]}
