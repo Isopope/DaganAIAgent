@@ -491,6 +491,67 @@ async def crag_stream(
             print(f"Sources: {len(collected_sources)}")
             print(f"{'='*60}\n")
             
+            # ─────────────────────────────────────────────────────────
+            # LOGGING DE LA CONVERSATION (PostgreSQL)
+            # ─────────────────────────────────────────────────────────
+            try:
+                conn = psycopg2.connect(postgres_connection_string)
+                cursor = conn.cursor()
+                
+                # Déterminer les tools utilisés basé sur les sources
+                tools_used = []
+                vector_searches = 0
+                web_searches = 0
+                
+                for source in collected_sources:
+                    source_type = source.get("type", "")
+                    if source_type == "vector_search" or "similarity_score" in source:
+                        if "vector_search" not in tools_used:
+                            tools_used.append("vector_search")
+                        vector_searches += 1
+                    elif source_type == "web_search" or "web" in source.get("url", "").lower():
+                        if "web_search" not in tools_used:
+                            tools_used.append("web_search")
+                        web_searches += 1
+                
+                if collected_sources and "reranker" not in tools_used:
+                    tools_used.append("reranker")
+                
+                # Insérer dans la table conversations
+                cursor.execute("""
+                    INSERT INTO conversations (
+                        id, question, answer, sources, tools_used,
+                        vector_searches, web_searches, status
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO UPDATE SET
+                        answer = EXCLUDED.answer,
+                        sources = EXCLUDED.sources,
+                        tools_used = EXCLUDED.tools_used,
+                        vector_searches = EXCLUDED.vector_searches,
+                        web_searches = EXCLUDED.web_searches,
+                        status = EXCLUDED.status,
+                        updated_at = NOW()
+                """, (
+                    thread_id,
+                    body.question,
+                    accumulated_answer,
+                    json.dumps(collected_sources),
+                    tools_used,
+                    vector_searches,
+                    web_searches,
+                    "completed"
+                ))
+                
+                conn.commit()
+                cursor.close()
+                conn.close()
+                
+                print(f"💾 Conversation {thread_id} enregistrée dans PostgreSQL")
+                
+            except Exception as log_error:
+                print(f"⚠️ Erreur lors de l'enregistrement de la conversation: {str(log_error)}")
+                # Ne pas bloquer le stream en cas d'erreur de logging
+            
             yield (
                 json.dumps({
                     "type": "complete",
@@ -510,6 +571,35 @@ async def crag_stream(
             print(f"❌ Erreur dans CRAG stream: {str(e)}")
             import traceback
             traceback.print_exc()
+            
+            # Logger l'erreur dans la base de données
+            try:
+                conn = psycopg2.connect(postgres_connection_string)
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    INSERT INTO conversations (
+                        id, question, status, error_message
+                    ) VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (id) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        error_message = EXCLUDED.error_message,
+                        updated_at = NOW()
+                """, (
+                    thread_id,
+                    body.question,
+                    "error",
+                    str(e)
+                ))
+                
+                conn.commit()
+                cursor.close()
+                conn.close()
+                
+                print(f"💾 Erreur de conversation {thread_id} enregistrée dans PostgreSQL")
+                
+            except Exception as log_error:
+                print(f"⚠️ Erreur lors de l'enregistrement de l'erreur: {str(log_error)}")
             
             yield (
                 json.dumps({

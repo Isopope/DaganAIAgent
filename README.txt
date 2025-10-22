@@ -1,1 +1,0 @@
-** Dagan Project **
