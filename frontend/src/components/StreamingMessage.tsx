@@ -65,51 +65,51 @@ export const StreamingMessage = ({
   }, []);
 
   return (
-    <div className="text-sm leading-relaxed">
+    <div className="text-xs leading-relaxed">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           h1: (props) => (
             <h1
-              className="text-xl font-bold text-foreground mb-4 pb-2 border-b"
+              className="text-base font-bold text-foreground mb-3 pb-1 border-b"
               {...props}
             />
           ),
           h2: (props) => (
             <h2
-              className="text-lg font-bold text-foreground mb-3 mt-6 pb-2 border-b border-border/50"
+              className="text-sm font-bold text-foreground mb-2 mt-4 pb-1 border-b border-border/50"
               {...props}
             />
           ),
           h3: (props) => (
             <h3
-              className="text-base font-semibold text-foreground mb-2 mt-4"
+              className="text-xs font-semibold text-foreground mb-2 mt-3"
               {...props}
             />
           ),
           h4: (props) => (
             <h4
-              className="text-sm font-semibold text-foreground/90 mb-2 mt-3"
+              className="text-xs font-semibold text-foreground/90 mb-1 mt-2"
               {...props}
             />
           ),
           p: (props) => (
-            <p className="text-foreground leading-relaxed mb-3" {...props} />
+            <p className="text-foreground leading-relaxed mb-2" {...props} />
           ),
           ul: (props) => (
             <ul
-              className="list-disc list-outside space-y-1 mb-3 text-foreground pl-5"
+              className="list-disc list-outside space-y-0.5 mb-2 text-foreground pl-4"
               {...props}
             />
           ),
           ol: (props) => (
             <ol
-              className="list-decimal list-outside space-y-1 mb-3 text-foreground pl-5"
+              className="list-decimal list-outside space-y-0.5 mb-2 text-foreground pl-4"
               {...props}
             />
           ),
           li: (props) => (
-            <li className="text-foreground leading-relaxed" {...props} />
+            <li className="text-foreground leading-relaxed text-xs" {...props} />
           ),
           blockquote: (props) => (
             <blockquote
@@ -122,12 +122,12 @@ export const StreamingMessage = ({
 
             if (match) {
               return (
-                <div className="my-3 rounded-lg overflow-hidden shadow-sm border">
-                  <div className="bg-muted px-4 py-2 text-xs font-medium text-muted-foreground border-b">
+                <div className="my-2 rounded-lg overflow-hidden shadow-sm border">
+                  <div className="bg-muted px-3 py-1 text-xs font-medium text-muted-foreground border-b">
                     {match[1]}
                   </div>
-                  <pre className="bg-muted p-4 overflow-x-auto">
-                    <code className="text-sm font-mono text-foreground">
+                  <pre className="bg-muted p-3 overflow-x-auto">
+                    <code className="text-xs font-mono text-foreground">
                       {String(children).replace(/\n$/, "")}
                     </code>
                   </pre>
@@ -136,7 +136,7 @@ export const StreamingMessage = ({
             } else {
               return (
                 <code
-                  className="bg-muted text-foreground px-1.5 py-0.5 rounded text-sm font-mono border"
+                  className="bg-muted text-foreground px-1 py-0.5 rounded text-xs font-mono border"
                   {...props}
                 >
                   {children}

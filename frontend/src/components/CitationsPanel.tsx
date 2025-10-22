@@ -31,7 +31,7 @@ export const CitationsPanel = ({ sources, isOpen, onClose }: CitationsPanelProps
   };
 
   return (
-    <div className="fixed right-0 top-0 h-screen w-[420px] bg-background border-l border-border shadow-2xl animate-slide-in-right z-50 flex flex-col">
+    <div className="fixed right-0 top-0 h-screen w-[380px] bg-background border-l border-border shadow-2xl animate-slide-in-right z-50 flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-border">
         <h2 className="text-lg font-semibold text-foreground">Citations</h2>
@@ -71,16 +71,16 @@ export const CitationsPanel = ({ sources, isOpen, onClose }: CitationsPanelProps
                     <ExternalLink className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                   </div>
                   <h3 className="font-semibold text-sm text-foreground mb-1 line-clamp-2 group-hover:text-accent transition-colors">
-                    {source.title}
+                    {getDomain(source.url)}
                   </h3>
-                  {source.description && (
+                  {source.content && (
                     <p className="text-xs text-muted-foreground line-clamp-3 mb-1">
-                      {source.description}
+                      {source.content.substring(0, 200)}
                     </p>
                   )}
-                  {source.date && (
+                  {source.similarity_score && (
                     <p className="text-xs text-muted-foreground/70">
-                      {source.date}
+                      Score: {source.similarity_score}
                     </p>
                   )}
                 </div>

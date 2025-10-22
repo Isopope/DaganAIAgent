@@ -409,6 +409,15 @@ async def crag_stream(
                     if node_name == "validate_domain":
                         is_valid = node_output.get("is_valid_domain", True)
                         
+                        # Émettre un status pour validate_domain
+                        yield (
+                            json.dumps({
+                                "type": "status",
+                                "step": "validate_domain",
+                                "message": "🔍 Validation du domaine..."
+                            }) + "\n"
+                        )
+                        
                         yield (
                             json.dumps({
                                 "type": "node_start",
@@ -440,6 +449,15 @@ async def crag_stream(
                     # AGENT_RAG node
                     # ─────────────────────────────────────────────────
                     elif node_name == "agent_rag":
+                        # Émettre un status pour agent_rag
+                        yield (
+                            json.dumps({
+                                "type": "status",
+                                "step": "agent_rag",
+                                "message": "🤖 Agent ReAct en cours..."
+                            }) + "\n"
+                        )
+                        
                         yield (
                             json.dumps({
                                 "type": "node_start",
@@ -460,6 +478,43 @@ async def crag_stream(
                                     collected_sources = msg.additional_kwargs.get("sources", [])
                                 
                                 break
+                        
+                        # Détecter les tools utilisés dans la réponse de l'agent pour émettre des status
+                        vector_search_used = False
+                        web_search_used = False
+                        
+                        # Analyser les sources pour détecter les outils utilisés
+                        for source in collected_sources:
+                            source_type = source.get("type", "")
+                            if source_type == "vector_search" or "similarity_score" in source:
+                                if not vector_search_used:
+                                    vector_search_used = True
+                                    yield (
+                                        json.dumps({
+                                            "type": "status",
+                                            "step": "vector_search",
+                                            "message": "🔍 Recherche vectorielle en cours..."
+                                        }) + "\n"
+                                    )
+                            elif source_type == "web_search" or "web" in source.get("url", "").lower():
+                                if not web_search_used:
+                                    web_search_used = True
+                                    yield (
+                                        json.dumps({
+                                            "type": "status",
+                                            "step": "web_search",
+                                            "message": "🌐 Recherche web en cours..."
+                                        }) + "\n"
+                                    )
+                        
+                        # Émettre status pour la génération de la réponse
+                        yield (
+                            json.dumps({
+                                "type": "status",
+                                "step": "generate",
+                                "message": "✨ Génération de la réponse..."
+                            }) + "\n"
+                        )
                         
                         # Simuler un streaming en envoyant par chunks
                         chunk_size = 50  # Caractères par chunk

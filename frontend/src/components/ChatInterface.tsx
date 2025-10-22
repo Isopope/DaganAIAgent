@@ -4,11 +4,11 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Send, Bot, User, Lightbulb } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { SourcesFavicons, Source } from "./SourcesFavicons";
 import { CitationsPanel } from "./CitationsPanel";
 import { StreamingMessage } from "./StreamingMessage";
+import { ToolPipeline } from "./ToolPipeline";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,10 +21,18 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
+interface ToolStep {
+  type: "validate_domain" | "agent_rag" | "vector_search" | "web_search" | "generate";
+  status: "pending" | "active" | "completed";
+  count?: number;
+  details?: string;
+}
+
 interface Message {
   role: "user" | "assistant";
   content: string;
   sources?: Source[];
+  toolSteps?: ToolStep[];
 }
 
 const SUGGESTED_QUESTIONS = [
@@ -40,6 +48,8 @@ export const ChatInterface = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [selectedSources, setSelectedSources] = useState<Source[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [currentToolSteps, setCurrentToolSteps] = useState<ToolStep[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
@@ -47,11 +57,15 @@ export const ChatInterface = () => {
   useEffect(() => {
     try {
       const stored = localStorage.getItem("chatMessages");
+      const storedConvId = localStorage.getItem("conversationId");
       if (stored) {
         const parsed: Message[] = JSON.parse(stored);
         if (Array.isArray(parsed)) {
           setMessages(parsed);
         }
+      }
+      if (storedConvId) {
+        setConversationId(storedConvId);
       }
     } catch (e) {
       // ignore
@@ -62,10 +76,13 @@ export const ChatInterface = () => {
   useEffect(() => {
     try {
       localStorage.setItem("chatMessages", JSON.stringify(messages));
+      if (conversationId) {
+        localStorage.setItem("conversationId", conversationId);
+      }
     } catch (e) {
       // ignore
     }
-  }, [messages]);
+  }, [messages, conversationId]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -81,43 +98,141 @@ export const ChatInterface = () => {
     setMessages(prev => [...prev, userMessage]);
     setInput("");
     setIsLoading(true);
+    
+    // Réinitialiser les étapes du pipeline
+    setCurrentToolSteps([]);
+
+    let accumulatedContent = "";
+    let collectedSources: Source[] = [];
+    let toolStepsMap = new Map<string, ToolStep>();
 
     try {
-      const { data, error } = await supabase.functions.invoke('chat', {
-        body: { 
-          messages: [...messages, userMessage],
-          systemPrompt: "Tu es Dagan, un assistant IA spécialisé dans l'aide aux démarches administratives togolaises. Ta source de référence principale est le site https://service-public.gouv.tg/. Tu dois fournir des informations exhaustives incluant les heures d'ouverture et les contacts des services administratifs concernés quand c'est pertinent. Si tu ne trouves pas une information, sois honnête et dis-le clairement. Reformule les informations administratives complexes en langage simple et compréhensible."
-        }
+      const apiUrl = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+      const requestBody: any = { question: payload };
+      if (conversationId) {
+        requestBody.conversation_id = conversationId;
+      }
+      
+      const response = await fetch(`${apiUrl}/crag/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
       });
 
-      if (error) throw error;
-
-      const content = typeof data === 'string'
-        ? data
-        : (data?.response ?? data?.message ?? "");
-
-      if (!content) {
-        throw new Error("Réponse vide du serveur. Vérifiez la configuration de la fonction chat.");
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const assistantMessage: Message = {
-        role: "assistant",
-        content,
-        sources: data?.sources || []
-      };
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
 
-      setMessages(prev => [...prev, assistantMessage]);
+      if (!reader) {
+        throw new Error("No response body");
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n");
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+
+          try {
+            const event = JSON.parse(line);
+
+            // Gérer les événements de status pour le pipeline
+            if (event.type === "status") {
+              const stepType = event.step as ToolStep["type"];
+              
+              // Marquer l'étape précédente comme completed si elle existe
+              toolStepsMap.forEach((step) => {
+                if (step.status === "active") {
+                  step.status = "completed";
+                }
+              });
+              
+              // Ajouter ou mettre à jour l'étape actuelle
+              if (!toolStepsMap.has(stepType)) {
+                toolStepsMap.set(stepType, {
+                  type: stepType,
+                  status: "active",
+                  count: 1,
+                  details: event.message
+                });
+              } else {
+                const existingStep = toolStepsMap.get(stepType)!;
+                existingStep.status = "active";
+                existingStep.count = (existingStep.count || 0) + 1;
+              }
+              
+              // Mettre à jour le state avec les étapes en ordre
+              const orderedSteps = Array.from(toolStepsMap.values());
+              setCurrentToolSteps([...orderedSteps]);
+            }
+            
+            if (event.type === "message_chunk") {
+              accumulatedContent += event.content;
+              setMessages(prev => {
+                const newMessages = [...prev];
+                const lastMsg = newMessages[newMessages.length - 1];
+                
+                if (lastMsg && lastMsg.role === "assistant") {
+                  lastMsg.content = accumulatedContent;
+                  lastMsg.toolSteps = Array.from(toolStepsMap.values());
+                } else {
+                  newMessages.push({
+                    role: "assistant",
+                    content: accumulatedContent,
+                    sources: [],
+                    toolSteps: Array.from(toolStepsMap.values())
+                  });
+                }
+                return newMessages;
+              });
+            } else if (event.type === "complete") {
+              collectedSources = event.sources || [];
+              
+              // Marquer toutes les étapes comme completed
+              toolStepsMap.forEach((step) => {
+                step.status = "completed";
+              });
+              
+              // Capture and persist conversation_id from backend
+              if (event.conversation_id) {
+                setConversationId(event.conversation_id);
+              }
+              
+              setMessages(prev => {
+                const newMessages = [...prev];
+                const lastMsg = newMessages[newMessages.length - 1];
+                if (lastMsg && lastMsg.role === "assistant") {
+                  lastMsg.content = event.answer;
+                  lastMsg.sources = collectedSources;
+                  lastMsg.toolSteps = Array.from(toolStepsMap.values());
+                }
+                return newMessages;
+              });
+              
+              // Nettoyer le pipeline actuel une fois terminé
+              setCurrentToolSteps([]);
+            } else if (event.type === "error") {
+              throw new Error(event.message || "Server error");
+            }
+          } catch (parseError) {
+            console.warn("Failed to parse event:", line);
+          }
+        }
+      }
     } catch (error: any) {
-      console.error('Error sending message:', error);
+      console.error("Error sending message:", error);
       toast({
         title: "Erreur",
-        description: (
-          typeof error?.message === 'string' && error.message.includes('429')
-            ? "Limite de requêtes atteinte. Réessayez dans quelques instants."
-            : typeof error?.message === 'string' && error.message.includes('402')
-            ? "Crédits insuffisants. Veuillez contacter l'administrateur."
-            : error?.message || "Une erreur est survenue lors de l'envoi du message."
-        ),
+        description: error?.message || "Une erreur est survenue lors de l'envoi du message.",
         variant: "destructive"
       });
     } finally {
@@ -134,14 +249,15 @@ export const ChatInterface = () => {
 
   const handleSuggestionClick = (question: string) => {
     setInput(question);
-    // Send immediately for faster onboarding
-    sendMessage(question);
+    // L'utilisateur peut maintenant modifier avant de soumettre manuellement
   };
 
   const handleClearConversation = () => {
     setMessages([]);
+    setConversationId(null);
     try {
       localStorage.removeItem("chatMessages");
+      localStorage.removeItem("conversationId");
     } catch (e) {
       // ignore
     }
@@ -154,9 +270,9 @@ export const ChatInterface = () => {
 
   return (
     <>
-    <Card className={`w-full shadow-2xl border-2 my-8 bg-white/95 backdrop-blur-sm transition-all duration-300 ${isPanelOpen ? 'max-w-3xl' : 'max-w-5xl'}`}>
-      <CardHeader className="flex flex-row items-center justify-between px-6 py-4 border-b bg-white">
-        <CardTitle className="text-lg font-semibold">Dagan — Assistant civique</CardTitle>
+    <Card className={`w-full shadow-2xl border-2 my-8 bg-white/95 backdrop-blur-sm transition-all duration-300 ${isPanelOpen ? 'max-w-[calc(100%-410px)] mr-[390px]' : 'max-w-[calc(100%-20px)]'}`}>
+      <CardHeader className="flex flex-row items-center justify-between px-4 py-2 border-b bg-white">
+        <CardTitle className="text-base font-semibold">Dagan — Assistant civique</CardTitle>
         <div className="flex items-center gap-2">
           <AlertDialog>
             <AlertDialogTrigger asChild>
@@ -183,24 +299,23 @@ export const ChatInterface = () => {
         </div>
       </CardHeader>
       <CardContent className="p-0">
-        <ScrollArea className="h-[60vh] p-6" ref={scrollRef}>
+        <ScrollArea className="h-[60vh] p-4" ref={scrollRef}>
           <div className="space-y-4">
             {messages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-8 space-y-6">
-                <div className="text-center space-y-3">
-                  <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 mb-2">
-                    <Bot className="h-8 w-8 text-primary" />
+              <div className="flex flex-col items-center justify-center py-4 space-y-3">
+                <div className="text-center space-y-2">
+                  <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-primary/10 mb-1">
+                    <Bot className="h-6 w-6 text-primary" />
                   </div>
-                  <h2 className="text-2xl font-bold text-foreground">Bienvenue sur Dagan</h2>
-                  <p className="text-muted-foreground max-w-md mx-auto">
-                    Votre assistant intelligent pour simplifier vos démarches administratives au Togo. 
-                    Posez vos questions et obtenez des réponses claires et précises avec les contacts et horaires des services.
+                  <h2 className="text-lg font-bold text-foreground">Bienvenue sur Dagan</h2>
+                  <p className="text-xs text-muted-foreground max-w-md mx-auto">
+                    Assistant intelligent pour vos démarches administratives au Togo.
                   </p>
                 </div>
                 
-                <div className="w-full max-w-2xl space-y-3">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground justify-center">
-                    <Lightbulb className="h-4 w-4 text-warning" />
+                <div className="w-full max-w-2xl space-y-2">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground justify-center">
+                    <Lightbulb className="h-3 w-3 text-warning" />
                     <span>Questions suggérées :</span>
                   </div>
                   <div className="grid gap-2">
@@ -208,7 +323,7 @@ export const ChatInterface = () => {
                       <button
                         key={idx}
                         onClick={() => handleSuggestionClick(question)}
-                        className="text-left px-4 py-3 rounded-lg border-2 border-primary/20 bg-white hover:bg-highlight hover:border-accent hover:shadow-2xl hover:shadow-accent/50 hover:scale-[1.05] transition-all duration-300 text-sm text-foreground font-medium group relative overflow-hidden"
+                        className="text-left px-3 py-2 rounded-lg border-2 border-primary/20 bg-white hover:bg-highlight hover:border-accent hover:shadow-2xl hover:shadow-accent/50 hover:scale-[1.05] transition-all duration-300 text-xs text-foreground font-medium group relative overflow-hidden"
                       >
                         <span className="relative z-10">{question}</span>
                         <div className="absolute inset-0 bg-gradient-to-r from-accent/0 via-accent/30 to-accent/0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700 ease-in-out"></div>
@@ -233,17 +348,22 @@ export const ChatInterface = () => {
                 )}
                 
                 <div
-                  className={`rounded-xl px-4 py-3 max-w-[80%] ${
+                  className={`rounded-xl px-3 py-2 max-w-[80%] ${
                     message.role === "user"
                       ? "bg-secondary text-white"
                       : "bg-white border shadow-sm"
                   }`}
                 >
                   <div className="flex flex-col">
+                    {/* Afficher le pipeline d'outils si disponible */}
+                    {message.role === "assistant" && message.toolSteps && message.toolSteps.length > 0 && (
+                      <ToolPipeline steps={message.toolSteps} />
+                    )}
+                    
                     {message.role === "assistant" ? (
                       <StreamingMessage content={message.content} />
                     ) : (
-                      <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                      <p className="text-xs leading-relaxed whitespace-pre-wrap">
                         {message.content}
                       </p>
                     )}
@@ -261,7 +381,19 @@ export const ChatInterface = () => {
               </div>
             ))}
             
-                {isLoading && (
+                {/* Afficher le pipeline en temps réel pendant le streaming */}
+                {isLoading && currentToolSteps.length > 0 && (
+                  <div className="flex gap-3 justify-start animate-fade-in">
+                    <div className="h-8 w-8 rounded-full bg-accent/15 flex items-center justify-center flex-shrink-0">
+                      <Bot className="h-5 w-5 text-accent" />
+                    </div>
+                    <div className="rounded-xl px-3 py-2 max-w-[80%] bg-white border shadow-sm">
+                      <ToolPipeline steps={currentToolSteps} />
+                    </div>
+                  </div>
+                )}
+            
+                {isLoading && currentToolSteps.length === 0 && (
                   <div className="flex gap-3 justify-start animate-fade-in">
                     <div className="h-8 w-8 rounded-full bg-accent/15 flex items-center justify-center">
                       <Bot className="h-5 w-5 text-accent" />
@@ -280,15 +412,15 @@ export const ChatInterface = () => {
           </div>
         </ScrollArea>
         
-        <div className="p-4 border-t">
+        <div className="p-3 border-t">
           <div className="flex gap-2">
             <Input
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyPress={handleKeyPress}
-              placeholder="Posez votre question sur les démarches administratives..."
+              placeholder="Posez votre question..."
               disabled={isLoading}
-              className="flex-1"
+              className="flex-1 text-xs"
             />
             <Button 
               onClick={() => sendMessage()} 

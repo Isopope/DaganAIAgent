@@ -70,7 +70,7 @@ User Question
 1. **Clone the repository**
 
 ```bash
-git clone https://github.com/yourusername/dagan.git
+git clone https://github.com/Isopope/DaganAIAgent.git
 cd dagan
 ```
 
@@ -276,7 +276,7 @@ We welcome contributions! Here's how you can help:
 1. **Fork the repository**
 
 ```bash
-git clone https://github.com/yourusername/dagan.git
+git clone https://github.com/Isopope/DaganAIAgent.git
 cd dagan
 git checkout -b feature/your-feature-name
 ```
@@ -284,9 +284,7 @@ git checkout -b feature/your-feature-name
 2. **Make your changes**
 
 - Follow the existing code style
-- Add tests for new features
 - Update documentation as needed
-- Ensure all tests pass
 
 3. **Commit your changes**
 
@@ -300,7 +298,6 @@ Use conventional commits:
 - `fix:` for bug fixes
 - `docs:` for documentation
 - `refactor:` for code refactoring
-- `test:` for adding tests
 
 4. **Push and create PR**
 
@@ -346,7 +343,7 @@ If you use Dagan in your research or project, please cite:
   title={Dagan: Agentic RAG System for Administrative Procedures},
   author={Novatekis},
   year={2025},
-  url={https://github.com/yourusername/dagan}
+  url={https://github.com/Isopope/DaganAIAgent.git}
 }
 ```
 
@@ -363,5 +360,3 @@ If you use Dagan in your research or project, please cite:
 - [ ] Metrics dashboard
 
 ---
-
-**Status**: Production Ready | **Version**: 2.0.0 | **Last Updated**: October 2025

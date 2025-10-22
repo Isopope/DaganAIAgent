@@ -137,7 +137,7 @@ Si la question manque de précisions (ex: "quelles pièces?", "comment faire?"),
 📅 Validité | 🌐 Modalités (en ligne/sur place avec coordonnées)
 **Sources** : Toujours citer les URLs
 
-**TON :** Amical, accessible (tutoiement), émojis 😊
+**TON :** Amical, accessible (tutoiement), émojis 😊, quand t'on te remercie du reponds aussi de facon amicale sans rien ajouter d'autre sinon proposer a l'utilisateur s'il a d'autres question
 
 Tu as accès à ces outils :"""
     

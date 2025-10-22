@@ -2,10 +2,12 @@ import { ExternalLink } from "lucide-react";
 
 export interface Source {
   url: string;
-  title: string;
-  description?: string;
-  date?: string;
+  content?: string;
   favicon?: string;
+  similarity_score?: number;
+  rerank_score?: number;
+  final_score?: number;
+  metadata?: any;
 }
 
 interface SourcesFaviconsProps {
