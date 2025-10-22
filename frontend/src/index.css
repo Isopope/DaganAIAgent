@@ -1,0 +1,152 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 13%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 13%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 13%;
+
+    /* Teal foncé Novatekis - Couleur principale */
+    --primary: 184 91% 17%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Vert Clair - Accent CTA */
+    --secondary: 88 50% 50%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 45%;
+
+    /* Teal clair Novatekis pour accents */
+    --accent: 174 41% 63%;
+    --accent-foreground: 0 0% 13%;
+
+    /* Jaune/Or pour surbrillance */
+    --warning: 43 96% 56%;
+    --warning-foreground: 0 0% 13%;
+    
+    /* Teal lumineux pour hover */
+    --highlight: 174 71% 85%;
+    --highlight-foreground: 0 0% 13%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 91%;
+    --input: 0 0% 91%;
+    --ring: 173 62% 27%;
+
+    --radius: 0.5rem;
+
+    /* Gradients togolais */
+    --gradient-primary: linear-gradient(135deg, hsl(173 62% 27%) 0%, hsl(173 62% 35%) 100%);
+    --gradient-hero: linear-gradient(180deg, hsl(173 62% 27%) 0%, hsl(173 62% 32%) 100%);
+    --gradient-accent: linear-gradient(135deg, hsl(88 50% 50%) 0%, hsl(88 50% 55%) 100%);
+
+    /* Shadows */
+    --shadow-sm: 0 2px 4px hsl(173 62% 27% / 0.08);
+    --shadow-md: 0 4px 12px hsl(173 62% 27% / 0.12);
+    --shadow-lg: 0 10px 30px hsl(173 62% 27% / 0.15);
+
+    /* Animations */
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .dark {
+    --background: 0 0% 13%;
+    --foreground: 0 0% 96%;
+
+    --card: 0 0% 16%;
+    --card-foreground: 0 0% 96%;
+
+    --popover: 0 0% 16%;
+    --popover-foreground: 0 0% 96%;
+
+    --primary: 184 91% 25%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 88 50% 50%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 0 0% 20%;
+    --muted-foreground: 0 0% 65%;
+
+    --accent: 174 41% 70%;
+    --accent-foreground: 0 0% 13%;
+
+    --warning: 43 100% 50%;
+    --warning-foreground: 0 0% 13%;
+    
+    --highlight: 174 71% 80%;
+    --highlight-foreground: 0 0% 13%;
+
+    --destructive: 0 63% 40%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 20%;
+    --input: 0 0% 20%;
+    --ring: 173 62% 35%;
+
+    --gradient-primary: linear-gradient(135deg, hsl(173 62% 35%) 0%, hsl(173 62% 40%) 100%);
+    --gradient-hero: linear-gradient(180deg, hsl(0 0% 13%) 0%, hsl(0 0% 16%) 100%);
+    --gradient-accent: linear-gradient(135deg, hsl(88 50% 50%) 0%, hsl(88 50% 55%) 100%);
+
+    --shadow-sm: 0 2px 4px hsl(0 0% 0% / 0.3);
+    --shadow-md: 0 4px 12px hsl(0 0% 0% / 0.4);
+    --shadow-lg: 0 10px 30px hsl(0 0% 0% / 0.5);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-inter;
+  }
+
+  .bg-grid-pattern {
+    background-image: 
+      linear-gradient(to right, hsl(var(--border)) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border)) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+
+  .bg-togo-pattern {
+    background-image: url('/src/assets/togo-lion.png');
+    background-size: 150px 150px;
+    background-repeat: repeat;
+    animation: slide-background 60s linear infinite;
+    opacity: 0.04;
+  }
+
+  @keyframes slide-background {
+    0% {
+      background-position: 0 0;
+    }
+    100% {
+      background-position: 150px 150px;
+    }
+  }
+}
