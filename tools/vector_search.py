@@ -34,10 +34,10 @@ def adaptive_threshold(similarities: List[float], alpha: float = 0.3) -> float:
     Calcule un seuil adaptatif basé sur la moyenne + alpha * écart-type
     """
     if not similarities:
-        return 0.8  # valeur par défaut
+        return 0.6  # valeur par défaut réduite pour récupérer plus de documents
     mu = np.mean(similarities)
     sigma = np.std(similarities)
-    return min(max(mu + alpha * sigma, 0.7), 0.9)  # borne entre 0.7 et 0.9
+    return min(max(mu + alpha * sigma, 0.5), 0.8)  # borne entre 0.5 et 0.8
 
 
 @tool
@@ -120,7 +120,7 @@ def vector_search_tool(question: str) -> dict:
 
         # Reranking LLM
         if len(relevant_docs) > 5:
-            print(f"⚙️ Reranking de {len(relevant_docs)} documents...")
+            print(f"Reranking de {len(relevant_docs)} documents...")
             reranked_docs = rerank_documents(question, relevant_docs, top_k=5)
         else:
             reranked_docs = relevant_docs

@@ -25,8 +25,9 @@ def calculate_reliability_score(url: str, trusted_sources: List[str]) -> float:
     Returns:
         Score entre 0 et 1 (1 = source officielle)
     """
-    # Sources officielles togolaises de confiance
+    # Sources officielles togolaises de confiance (ordre de priorité)
     official_sources = [
+        "service-public.gouv.tg",  # Priorité 1
         "gouv.tg",
         "republiquetogolaise.com",
         "presidence.gouv.tg",
@@ -34,10 +35,12 @@ def calculate_reliability_score(url: str, trusted_sources: List[str]) -> float:
         "primature.gouv.tg"
     ]
     
-    # Vérifier si l'URL contient un domaine officiel
-    for source in official_sources:
+    # Vérifier si l'URL contient un domaine officiel avec score prioritaire
+    for idx, source in enumerate(official_sources):
         if source in url.lower():
-            return 1.0
+            # service-public.gouv.tg obtient le score maximal (1.0)
+            # Autres domaines officiels obtiennent 0.95
+            return 1.0 if idx == 0 else 0.95
     
     # Sources internationales fiables
     reliable_sources = [
@@ -72,17 +75,17 @@ def web_search_tool(query: str) -> dict:
         # 1. Initialize Tavily client
         tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
         
-        # 2. Perform advanced search with Togo focus (augmenter max_results pour le reranking)
+        # 2. Perform advanced search with Togo focus
         search_results = tavily_client.search(
             query=query,
-            max_results=10,  # Augmenté de 3 à 10 pour avoir plus de candidats au reranking
+            max_results=5,
             search_depth="advanced",
             country="togo",
             include_favicon=True,
             #include_answer="advanced",
             include_raw_content="text",
             chunks_per_source=2,
-            include_domains=[]
+            include_domains=["service-public.gouv.tg", "gouv.tg"]
         )
         
         # 3. Process results and calculate reliability scores
@@ -113,13 +116,9 @@ def web_search_tool(query: str) -> dict:
                 "title": result.get("title", "")
             })
         
-        # 4. RERANKING avec LLM pour améliorer la pertinence et prioriser sources officielles
-        if len(processed_results) > 5:
-            print(f"Reranking de {len(processed_results)} résultats web...")
-            processed_results = rerank_web_results(query, processed_results, top_k=5)
-        else:
-            # Si peu de résultats, juste trier par reliability score
-            processed_results.sort(key=lambda x: x["reliability_score"], reverse=True)
+        # 4. Trier par reliability score pour prioriser service-public.gouv.tg
+        # Pas de reranking LLM car déjà limité à 5 résultats avec domaines prioritaires
+        processed_results.sort(key=lambda x: x["reliability_score"], reverse=True)
         
         # 5. Return structured dict with sources
         if processed_results:
@@ -128,9 +127,8 @@ def web_search_tool(query: str) -> dict:
                 "query": query,
                 "result_count": len(processed_results),
                 "answer": search_results.get("answer", ""),
-                "reranked": True if len(processed_results) > 0 and "rerank_score" in processed_results[0] else False,
-                "sources": processed_results,  # Liste complète des sources avec URLs (reranked)
-                "summary": f" Trouvé {len(processed_results)} résultat(s) web pertinent(s) pour '{query}' (reranked)"
+                "sources": processed_results,
+                "summary": f"Trouvé {len(processed_results)} résultat(s) web pertinent(s) pour '{query}'"
             }
         else:
             return {
@@ -138,7 +136,7 @@ def web_search_tool(query: str) -> dict:
                 "query": query,
                 "result_count": 0,
                 "sources": [],
-                "summary": f" Aucun résultat web trouvé pour '{query}'"
+                "summary": f"Aucun résultat web trouvé pour '{query}'"
             }
         
     except Exception as e:
@@ -147,6 +145,6 @@ def web_search_tool(query: str) -> dict:
             "query": query,
             "error": str(e),
             "sources": [],
-            "summary": f" Erreur lors de la recherche web: {str(e)}"
+            "summary": f"Erreur lors de la recherche web: {str(e)}"
         }
 

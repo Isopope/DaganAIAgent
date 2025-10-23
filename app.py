@@ -169,7 +169,7 @@ async def vectorize_url(
                 USING collection_id::TEXT
             """)
             conn.commit()
-            print("✅ Colonne collection_id modifiée en TEXT")
+            print("Colonne collection_id modifiée en TEXT")
         
         # Create table if not exists (avec collection_id en TEXT)
         cursor.execute("""
@@ -326,7 +326,7 @@ async def crag_query(
         return JSONResponse(content=response_data)
         
     except Exception as e:
-        print(f"❌ Erreur dans Agent RAG workflow: {str(e)}")
+        print(f"Erreur dans Agent RAG workflow: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(
@@ -372,7 +372,7 @@ async def crag_stream(
             thread_id = body.conversation_id or str(uuid4())
             
             print(f"\n{'='*60}")
-            print(f"🌊 Agent RAG Stream Request")
+            print(f"Agent RAG Stream Request")
             print(f"{'='*60}")
             print(f"Question: {body.question}")
             print(f"Thread ID: {thread_id}")
@@ -401,7 +401,7 @@ async def crag_stream(
                 # et valeur = état retourné par ce node
                 
                 for node_name, node_output in event.items():
-                    print(f"📊 Node: {node_name}")
+                    print(f"Node: {node_name}")
                     
                     # ─────────────────────────────────────────────────
                     # VALIDATE_DOMAIN node
@@ -414,7 +414,7 @@ async def crag_stream(
                             json.dumps({
                                 "type": "status",
                                 "step": "validate_domain",
-                                "message": "🔍 Validation du domaine..."
+                                "message": "Validation du domaine..."
                             }) + "\n"
                         )
                         
@@ -422,7 +422,7 @@ async def crag_stream(
                             json.dumps({
                                 "type": "node_start",
                                 "node": "validate_domain",
-                                "message": "🔍 Validation du domaine..."
+                                "message": "Validation du domaine..."
                             }) + "\n"
                         )
                         
@@ -432,7 +432,7 @@ async def crag_stream(
                                     "type": "node_end",
                                     "node": "validate_domain",
                                     "is_valid": False,
-                                    "message": "❌ Question hors-sujet administratif"
+                                    "message": "Question hors-sujet administratif"
                                 }) + "\n"
                             )
                         else:
@@ -441,7 +441,7 @@ async def crag_stream(
                                     "type": "node_end",
                                     "node": "validate_domain",
                                     "is_valid": True,
-                                    "message": "✅ Question validée (domaine administratif)"
+                                    "message": "Question validée (domaine administratif)"
                                 }) + "\n"
                             )
                     
@@ -454,7 +454,7 @@ async def crag_stream(
                             json.dumps({
                                 "type": "status",
                                 "step": "agent_rag",
-                                "message": "🤖 Agent ReAct en cours..."
+                                "message": "Agent ReAct en cours..."
                             }) + "\n"
                         )
                         
@@ -462,7 +462,7 @@ async def crag_stream(
                             json.dumps({
                                 "type": "node_start",
                                 "node": "agent_rag",
-                                "message": "🤖 Agent ReAct en cours d'exécution..."
+                                "message": "Agent ReAct en cours d'exécution..."
                             }) + "\n"
                         )
                         
@@ -493,7 +493,7 @@ async def crag_stream(
                                         json.dumps({
                                             "type": "status",
                                             "step": "vector_search",
-                                            "message": "🔍 Recherche vectorielle en cours..."
+                                            "message": "Recherche vectorielle en cours..."
                                         }) + "\n"
                                     )
                             elif source_type == "web_search" or "web" in source.get("url", "").lower():
@@ -503,7 +503,7 @@ async def crag_stream(
                                         json.dumps({
                                             "type": "status",
                                             "step": "web_search",
-                                            "message": "🌐 Recherche web en cours..."
+                                            "message": "Recherche web en cours..."
                                         }) + "\n"
                                     )
                         
@@ -512,7 +512,7 @@ async def crag_stream(
                             json.dumps({
                                 "type": "status",
                                 "step": "generate",
-                                "message": "✨ Génération de la réponse..."
+                                "message": "Génération de la réponse..."
                             }) + "\n"
                         )
                         
@@ -532,7 +532,7 @@ async def crag_stream(
                             json.dumps({
                                 "type": "node_end",
                                 "node": "agent_rag",
-                                "message": f"✅ Réponse générée ({len(accumulated_answer)} caractères, {len(collected_sources)} sources)"
+                                "message": f"Réponse générée ({len(accumulated_answer)} caractères, {len(collected_sources)} sources)"
                             }) + "\n"
                         )
             
@@ -540,7 +540,7 @@ async def crag_stream(
             # EVENT FINAL - Workflow complet
             # ─────────────────────────────────────────────────────────
             print(f"\n{'='*60}")
-            print(f"✅ Agent RAG Stream Completed")
+            print(f"Agent RAG Stream Completed")
             print(f"{'='*60}")
             print(f"Réponse: {len(accumulated_answer)} caractères")
             print(f"Sources: {len(collected_sources)}")
@@ -613,7 +613,7 @@ async def crag_stream(
                     "conversation_id": thread_id,
                     "question": body.question,
                     "answer": accumulated_answer,
-                    "sources": collected_sources,  # ✅ SOURCES INCLUSES
+                    "sources": collected_sources,
                     "metadata": {
                         "workflow": "agent_rag",
                         "sources_count": len(collected_sources),
@@ -623,7 +623,7 @@ async def crag_stream(
             )
             
         except Exception as e:
-            print(f"❌ Erreur dans CRAG stream: {str(e)}")
+            print(f"Erreur dans CRAG stream: {str(e)}")
             import traceback
             traceback.print_exc()
             

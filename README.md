@@ -277,7 +277,7 @@ We welcome contributions! Here's how you can help:
 
 ```bash
 git clone https://github.com/Isopope/DaganAIAgent.git
-cd dagan
+cd DaganAiAgent
 git checkout -b feature/your-feature-name
 ```
 
@@ -346,17 +346,4 @@ If you use Dagan in your research or project, please cite:
   url={https://github.com/Isopope/DaganAIAgent.git}
 }
 ```
-
-## Roadmap
-
-- [x] Core RAG functionality
-- [x] ReAct agent integration
-- [x] LLM-based reranking
-- [x] Streaming support
-- [ ] Web UI
-- [ ] Docker deployment
-- [ ] API authentication
-- [ ] Rate limiting
-- [ ] Metrics dashboard
-
 ---

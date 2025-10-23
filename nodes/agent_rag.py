@@ -104,12 +104,12 @@ def agent_rag(state: Dict) -> Dict:
         web_search_tool
     ]
     
-    print(f"🛠️  Tools disponibles: {[t.name for t in tools]}")
+    print(f"Tools disponibles: {[t.name for t in tools]}")
     
     # Adapter le prompt système pour l'agent ReAct
     # Le prompt SYSTEM_PROMPT_TEMPLATE est conçu pour un RAG classique avec contexte
     # On l'adapte pour un agent qui utilise des tools
-    agent_system_prompt = """Tu es **Dagan**, assistant virtuel pour les citoyens togolais 🇹🇬
+    agent_system_prompt = """Tu es **Dagan**, assistant virtuel pour les citoyens togolais
 
 **TA MISSION :**
 Aider les citoyens avec des informations précises sur les procédures administratives et services publics togolais.
@@ -132,12 +132,12 @@ Si la question manque de précisions (ex: "quelles pièces?", "comment faire?"),
 4. Si la question est trop vague et aucun résultat, demander des précisions dans la Final Answer
 
 **STRUCTURE DE RÉPONSE POUR PROCÉDURES :**
-📋 Description | 📌 Conditions | 📄 Pièces nécessaires (LISTE COMPLÈTE, pas de "etc.")
-🔢 Étapes numérotées | 💰 Coût exact en F CFA | ⏱️ Délais
-📅 Validité | 🌐 Modalités (en ligne/sur place avec coordonnées)
+Description | Conditions | Pièces nécessaires (LISTE COMPLÈTE, pas de "etc.")
+Étapes numérotées | Coût exact en F CFA | Délais
+Validité | Modalités (en ligne/sur place avec coordonnées)
 **Sources** : Toujours citer les URLs
 
-**TON :** Amical, accessible (tutoiement), émojis 😊, quand t'on te remercie du reponds aussi de facon amicale sans rien ajouter d'autre sinon proposer a l'utilisateur s'il a d'autres question
+**TON :** Amical, accessible (tutoiement),emojis, quand t'on te remercie du reponds aussi de facon amicale sans rien ajouter d'autre sinon proposer a l'utilisateur s'il a d'autres question
 
 Tu as accès à ces outils :"""
     
@@ -235,7 +235,7 @@ Final Answer: [Ta réponse complète structurée ici]
                     if tool_sources:
                         sources.extend(tool_sources)
         
-        print(f"✅ Agent terminé - Réponse: {len(answer)} caractères, Sources: {len(sources)}")
+        print(f"Agent terminé - Réponse: {len(answer)} caractères, Sources: {len(sources)}")
         
         # créer un AIMessage avec la réponse ET les sources en metadata
         ai_message = AIMessage(
