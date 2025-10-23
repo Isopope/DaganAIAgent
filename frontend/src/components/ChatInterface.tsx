@@ -3,12 +3,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Send, Bot, User, Lightbulb } from "lucide-react";
+import { Send, User, Lightbulb } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { SourcesFavicons, Source } from "./SourcesFavicons";
 import { CitationsPanel } from "./CitationsPanel";
 import { StreamingMessage } from "./StreamingMessage";
 import { ToolPipeline } from "./ToolPipeline";
+import avatarImage from "@/assets/avatar.svg";
+import rienImage from "@/assets/rien.svg";
+import reflexionImage from "@/assets/reflexion.svg";
+import logoImage from "@/assets/Novatekis.svg";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -38,8 +42,7 @@ interface Message {
 const SUGGESTED_QUESTIONS = [
   "Comment obtenir une carte d'identité nationale ?",
   "Quelles sont les démarches pour créer une entreprise ?",
-  "Comment renouveler mon passeport ?",
-  "Où puis-je payer mes impôts en ligne ?"
+  "Comment renouveler mon passeport ?"
 ];
 
 export const ChatInterface = () => {
@@ -268,11 +271,33 @@ export const ChatInterface = () => {
     setIsPanelOpen(true);
   };
 
+  // Fonction pour déterminer l'avatar à afficher selon l'état du pipeline
+  const getAvatarForSteps = (steps?: ToolStep[]) => {
+    if (!steps || steps.length === 0) return rienImage;
+    
+    // Si on est en train de générer (generate active ou completed), utiliser avatar.svg
+    const hasGenerateActive = steps.some(s => s.type === "generate" && (s.status === "active" || s.status === "completed"));
+    if (hasGenerateActive) return avatarImage;
+    
+    // Si on a des étapes de recherche actives, utiliser reflexion.svg
+    const hasActiveSearch = steps.some(s => 
+      (s.type === "validate_domain" || s.type === "agent_rag" || s.type === "vector_search" || s.type === "web_search") 
+      && s.status === "active"
+    );
+    if (hasActiveSearch) return reflexionImage;
+    
+    // Par défaut, rien.svg
+    return rienImage;
+  };
+
   return (
     <>
     <Card className={`w-full shadow-2xl border-2 my-8 bg-white/95 backdrop-blur-sm transition-all duration-300 ${isPanelOpen ? 'max-w-[calc(100%-410px)] mr-[390px]' : 'max-w-[calc(100%-20px)]'}`}>
       <CardHeader className="flex flex-row items-center justify-between px-4 py-2 border-b bg-white">
-        <CardTitle className="text-base font-semibold">Dagan — Assistant civique</CardTitle>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">Développé par</span>
+          <img src={logoImage} alt="Novatekis" className="h-10 w-auto" />
+        </div>
         <div className="flex items-center gap-2">
           <AlertDialog>
             <AlertDialogTrigger asChild>
@@ -304,10 +329,10 @@ export const ChatInterface = () => {
             {messages.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-4 space-y-3">
                 <div className="text-center space-y-2">
-                  <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-primary/10 mb-1">
-                    <Bot className="h-6 w-6 text-primary" />
+                  <div className="inline-flex items-center justify-center w-56 h-56 mb-0.5">
+                    <img src={avatarImage} alt="Dagan Avatar" className="h-48 w-48" />
                   </div>
-                  <h2 className="text-lg font-bold text-foreground">Bienvenue sur Dagan</h2>
+                  <h2 className="text-lg font-bold text-foreground">Woezon, Bonjour je suis Dagan votre assistant IA</h2>
                   <p className="text-xs text-muted-foreground max-w-md mx-auto">
                     Assistant intelligent pour vos démarches administratives au Togo.
                   </p>
@@ -342,15 +367,15 @@ export const ChatInterface = () => {
                 } animate-fade-in`}
               >
                 {message.role === "assistant" && (
-                  <div className="h-8 w-8 rounded-full bg-accent/15 flex items-center justify-center flex-shrink-0">
-                    <Bot className="h-5 w-5 text-accent" />
+                  <div className="h-10 w-10 flex items-center justify-center flex-shrink-0">
+                    <img src={getAvatarForSteps(message.toolSteps)} alt="Dagan" className="h-9 w-9" />
                   </div>
                 )}
                 
                 <div
                   className={`rounded-xl px-3 py-2 max-w-[80%] ${
                     message.role === "user"
-                      ? "bg-secondary text-white"
+                      ? "bg-[#86b7b2] text-white"
                       : "bg-white border shadow-sm"
                   }`}
                 >
@@ -384,8 +409,8 @@ export const ChatInterface = () => {
                 {/* Afficher le pipeline en temps réel pendant le streaming */}
                 {isLoading && currentToolSteps.length > 0 && (
                   <div className="flex gap-3 justify-start animate-fade-in">
-                    <div className="h-8 w-8 rounded-full bg-accent/15 flex items-center justify-center flex-shrink-0">
-                      <Bot className="h-5 w-5 text-accent" />
+                    <div className="h-10 w-10 flex items-center justify-center flex-shrink-0">
+                      <img src={getAvatarForSteps(currentToolSteps)} alt="Dagan" className="h-9 w-9" />
                     </div>
                     <div className="rounded-xl px-3 py-2 max-w-[80%] bg-white border shadow-sm">
                       <ToolPipeline steps={currentToolSteps} />
@@ -395,8 +420,8 @@ export const ChatInterface = () => {
             
                 {isLoading && currentToolSteps.length === 0 && (
                   <div className="flex gap-3 justify-start animate-fade-in">
-                    <div className="h-8 w-8 rounded-full bg-accent/15 flex items-center justify-center">
-                      <Bot className="h-5 w-5 text-accent" />
+                    <div className="h-10 w-10 flex items-center justify-center">
+                      <img src={rienImage} alt="Dagan" className="h-9 w-9" />
                     </div>
                     <div className="rounded-xl px-4 py-3 bg-white border shadow-sm">
                       <div className="flex gap-1">
@@ -426,7 +451,7 @@ export const ChatInterface = () => {
               onClick={() => sendMessage()} 
               disabled={isLoading || !input.trim()}
               size="icon"
-              className="flex-shrink-0 bg-secondary hover:bg-secondary/90"
+              className="flex-shrink-0 bg-[#025253] hover:bg-[#025253]/90"
             >
               <Send className="h-4 w-4" />
             </Button>

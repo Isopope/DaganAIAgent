@@ -3,9 +3,7 @@ export const Footer = () => {
     <footer className="bg-primary text-white py-6 mt-auto">
       <div className="container mx-auto px-4">
         <div className="text-center space-y-2">
-          <p className="text-sm text-white/90">
-            © 2025 République Togolaise - Service Public
-          </p>
+          
           <p className="text-xs text-white/70">
             Fait par amour par{" "}
             <a 
@@ -14,7 +12,7 @@ export const Footer = () => {
               rel="noopener noreferrer"
               className="hover:text-white transition-colors underline"
             >
-              Novatekis
+              © Novatekis
             </a>
             {" "}pour les Togolais
           </p>

@@ -19,7 +19,7 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain.schema import Document, HumanMessage
@@ -29,6 +29,7 @@ from tavily import TavilyClient
 import psycopg2
 import numpy as np
 from openai import OpenAI
+from datetime import datetime
 
 from crag_graph import get_crag_graph
 
@@ -64,6 +65,199 @@ class CragQueryRequest(BaseModel):
 @app.get("/")
 async def ping():
     return {"message": "Alive"}
+
+
+@app.post("/vectorize-file")
+async def vectorize_file(
+    file: UploadFile = File(...),
+    collection_name: str = Form(None)
+):
+    """
+    Vectorise le contenu d'un fichier texte (.txt) en chunks avec embeddings.
+    
+    Args:
+        file: Fichier .txt à vectoriser
+        collection_name: Nom de la collection (défaut: "file_uploads")
+        
+    Returns:
+        JSON avec résumé de la vectorisation
+        
+    Limites:
+        - Taille max: 10 MB
+        - Format: .txt uniquement
+        
+    Process:
+        1. Validation fichier (extension, taille)
+        2. Lecture contenu texte
+        3. Chunking avec overlap (4000 chars, 800 overlap)
+        4. Génération embeddings OpenAI
+        5. Stockage dans PGVector avec métadonnées
+    """
+    try:
+        # 1. Validation de l'extension
+        if not file.filename.endswith('.txt'):
+            raise HTTPException(
+                status_code=400,
+                detail="Format de fichier non supporté. Uniquement .txt accepté."
+            )
+        
+        # 2. Lecture du contenu
+        content = await file.read()
+        
+        # 3. Validation de la taille (10 MB max)
+        max_size = 10 * 1024 * 1024  # 10 MB
+        file_size = len(content)
+        
+        if file_size > max_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Fichier trop volumineux ({file_size} bytes). Maximum: {max_size} bytes (10 MB)."
+            )
+        
+        # 4. Décodage du contenu en texte
+        try:
+            text_content = content.decode('utf-8')
+        except UnicodeDecodeError:
+            # Essayer avec d'autres encodages
+            try:
+                text_content = content.decode('latin-1')
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Impossible de décoder le fichier. Assurez-vous qu'il s'agit d'un fichier texte valide (UTF-8 ou Latin-1)."
+                )
+        
+        if not text_content.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Le fichier est vide ou ne contient pas de texte valide."
+            )
+        
+        print(f"✓ Fichier '{file.filename}' lu avec succès ({file_size} bytes, {len(text_content)} caractères)")
+        
+        # 5. Chunking avec overlap (même stratégie que /vectorize)
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=4000,
+            chunk_overlap=800,
+            separators=["\n\n", "\n", ".", " ", ""],
+            length_function=len
+        )
+        
+        chunks = text_splitter.split_text(text_content)
+        
+        if not chunks:
+            raise HTTPException(
+                status_code=400,
+                detail="Aucun chunk généré. Le contenu est peut-être trop court."
+            )
+        
+        print(f"✓ {len(chunks)} chunks générés avec overlap (size=4000, overlap=800)")
+        
+        # 6. Préparer les métadonnées
+        collection = collection_name or "file_uploads"
+        upload_timestamp = datetime.utcnow().isoformat()
+        
+        documents = []
+        for chunk_index, chunk_content in enumerate(chunks):
+            doc = Document(
+                page_content=chunk_content,
+                metadata={
+                    "filename": file.filename,
+                    "file_size": file_size,
+                    "upload_date": upload_timestamp,
+                    "file_type": "text/plain",
+                    "source": "file_upload",
+                    "chunk_index": chunk_index,
+                    "chunk_count": len(chunks),
+                    "chunk_size": len(chunk_content)
+                }
+            )
+            documents.append(doc)
+        
+        print(f"✓ {len(documents)} documents créés avec métadonnées")
+        
+        # 7. Génération des embeddings et stockage dans PGVector
+        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        
+        conn = psycopg2.connect(postgres_connection_string)
+        cursor = conn.cursor()
+        
+        # Vérifier/créer la table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS langchain_pg_embedding (
+                id TEXT PRIMARY KEY,
+                collection_id TEXT,
+                embedding VECTOR(2000),
+                document TEXT,
+                cmetadata JSONB
+            )
+        """)
+        
+        # Créer l'index si nécessaire
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS langchain_pg_embedding_embedding_idx 
+            ON langchain_pg_embedding 
+            USING ivfflat (embedding vector_cosine_ops)
+            WITH (lists = 100)
+        """)
+        
+        conn.commit()
+        
+        # 8. Générer embeddings et insérer
+        uuids = [str(uuid4()) for _ in range(len(documents))]
+        
+        for i, (doc, doc_id) in enumerate(zip(documents, uuids)):
+            # Générer embedding
+            response = openai_client.embeddings.create(
+                model="text-embedding-3-large",
+                input=doc.page_content,
+                dimensions=2000
+            )
+            embedding = response.data[0].embedding
+            
+            # Insérer dans PGVector
+            cursor.execute("""
+                INSERT INTO langchain_pg_embedding (id, collection_id, embedding, document, cmetadata)
+                VALUES (%s, %s, %s::vector, %s, %s)
+                ON CONFLICT (id) DO UPDATE 
+                SET embedding = EXCLUDED.embedding, 
+                    document = EXCLUDED.document, 
+                    cmetadata = EXCLUDED.cmetadata
+            """, (doc_id, collection, embedding, doc.page_content, json.dumps(doc.metadata)))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        print(f"✓ {len(documents)} documents vectorisés et stockés dans collection '{collection}'")
+        
+        return JSONResponse(
+            content={
+                "success": True,
+                "message": f"Fichier '{file.filename}' vectorisé avec succès",
+                "filename": file.filename,
+                "file_size": file_size,
+                "collection": collection,
+                "documents_count": len(documents),
+                "chunks_info": {
+                    "chunk_size": 4000,
+                    "chunk_overlap": 800,
+                    "total_chunks": len(chunks),
+                    "total_characters": len(text_content)
+                },
+                "upload_date": upload_timestamp
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur lors de la vectorisation du fichier: {str(e)}"
+        )
 
 @app.post("/vectorize")
 async def vectorize_url(
