@@ -40,9 +40,10 @@ interface Message {
 }
 
 const SUGGESTED_QUESTIONS = [
-  "Comment obtenir une carte d'identité nationale ?",
-  "Quelles sont les démarches pour créer une entreprise ?",
-  "Comment renouveler mon passeport ?"
+  "Comment renouveler mon passeport ?",
+  "Comment obtenir un duplicata d'un certificat de nationalité ?",
+  "Demande d'abonnement à la fibre optique  de YAS TOGO",
+  "Quelle est la procédure pour étudier en France pour un étudiant Togolais ?"
 ];
 
 export const ChatInterface = () => {
@@ -252,7 +253,7 @@ export const ChatInterface = () => {
 
   const handleSuggestionClick = (question: string) => {
     setInput(question);
-    // L'utilisateur peut maintenant modifier avant de soumettre manuellement
+    
   };
 
   const handleClearConversation = () => {
@@ -262,7 +263,7 @@ export const ChatInterface = () => {
       localStorage.removeItem("chatMessages");
       localStorage.removeItem("conversationId");
     } catch (e) {
-      // ignore
+
     }
   };
 
