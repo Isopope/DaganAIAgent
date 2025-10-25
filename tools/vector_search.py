@@ -33,9 +33,10 @@ def calculate_cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
 
 def adaptive_threshold(similarities: List[float], alpha: float = 0.1) -> float:
     """
-    Seuil fixe conservateur pour maximiser le rappel
+    Seuil fixe conservateur pour garantir la pertinence des résultats
+    Augmenté à 0.70 pour éviter les faux positifs
     """
-    return 0.5  # Seuil fixe : garder tous les documents avec similarité >= 0.5
+    return 0.70  # Seuil fixe : garder uniquement les documents avec similarité >= 70%
 
 
 @tool

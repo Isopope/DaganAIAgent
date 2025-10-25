@@ -83,7 +83,7 @@ def web_search_tool(query: str) -> dict:
             country="togo",
             include_favicon=True,
             #include_answer="advanced",
-            include_raw_content="text",
+            #include_raw_content="markdown",
             chunks_per_source=2,
             include_domains=["service-public.gouv.tg", "gouv.tg"]
         )
@@ -138,7 +138,6 @@ def web_search_tool(query: str) -> dict:
                 "sources": [],
                 "summary": f"Aucun résultat web trouvé pour '{query}'"
             }
-        
     except Exception as e:
         return {
             "status": "error",
@@ -146,5 +145,74 @@ def web_search_tool(query: str) -> dict:
             "error": str(e),
             "sources": [],
             "summary": f"Erreur lors de la recherche web: {str(e)}"
+        }    
+@tool
+def web_crawl_tool(url: str) -> dict:
+    """
+    Crawl une page web spécifique pour extraire son contenu complet.
+    Optimisé pour les sites togolais officiels avec scoring de fiabilité.
+
+    Args:
+        url: L'URL de la page à crawler
+
+    Returns:
+        Dictionnaire structuré avec le contenu crawlée et métadonnées
+    """
+
+    try:
+        # 1. Initialize Tavily client
+        tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
+
+        # 2. Crawl the specific URL
+        crawl_results = tavily_client.extract(
+            urls=[url],
+            max_depth=2,
+            extract_depth="advanced",
+            format="markdown",
+            include_favicon=True,
+            include_images=False
+        )
+
+        # 3. Process crawl results
+        if not crawl_results or not crawl_results.get("results"):
+            return {
+                "status": "no_content",
+                "url": url,
+                "content": "",
+                "title": "",
+                "error": "Aucun contenu trouvé lors du crawling",
+                "summary": f"Impossible de crawler l'URL: {url}"
+            }
+
+        result = crawl_results["results"][0]
+
+        # 4. Calculate reliability score
+        reliability_score = calculate_reliability_score(url, [])
+        is_official = reliability_score >= 0.9
+
+        # 5. Extract content and metadata
+        content = result.get("raw_content", "")
+        title = result.get("title", "")
+
+        # 6. Return structured dict
+        return {
+            "status": "success",
+            "url": url,
+            "title": title,
+            "content": content,
+            "reliability_score": round(reliability_score, 2),
+            "is_official": is_official,
+            "word_count": len(content.split()) if content else 0,
+            "summary": f"Contenu crawlée depuis {url} ({len(content.split()) if content else 0} mots)"
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "url": url,
+            "error": str(e),
+            "content": "",
+            "title": "",
+            "summary": f"Erreur lors du crawling: {str(e)}"
         }
 

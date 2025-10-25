@@ -440,11 +440,12 @@ async def crag_query(
     fastapi_request: Request,
 ):
     """
-    Endpoint pour tester le workflow Agent RAG complet avec mémoire conversationnelle
+    Endpoint pour tester le workflow Hybrid RAG complet avec mémoire conversationnelle
     
-    Le workflow Agent RAG:
-    1. VALIDATE_DOMAIN: Vérifie si la question concerne le domaine administratif togolais
-    2. AGENT_RAG: Agent ReAct qui utilise vector_search_tool et web_search_tool
+    Le workflow Hybrid RAG:
+    1. ROUTE_QUESTION: Classifie la question (casual vs admin)
+    2. CASUAL_CONVO: Réponses amicales pour conversations informelles
+    3. AGENT_RAG: Agent ReAct pour questions administratives
     
     Args:
         body: CragQueryRequest avec question et conversation_id optionnel
@@ -457,7 +458,7 @@ async def crag_query(
         thread_id = body.conversation_id or str(uuid4())
         
         print(f"\n{'='*60}")
-        print(f"Agent RAG Query Request")
+        print(f"Hybrid RAG Query Request")
         print(f"{'='*60}")
         print(f"Question: {body.question}")
         print(f"Thread ID: {thread_id}")
@@ -481,7 +482,7 @@ async def crag_query(
         final_state = agent_graph.invoke(initial_state, config)
         
         print(f"\n{'='*60}")
-        print(f"Agent RAG Workflow Completed")
+        print(f"Hybrid RAG Workflow Completed")
         print(f"{'='*60}")
         print(f"Messages: {len(final_state.get('messages', []))}")
         print(f"{'='*60}\n")
@@ -511,7 +512,7 @@ async def crag_query(
             "answer": final_answer,
             "sources": sources,  # Liste complète des sources avec URLs
             "metadata": {
-                "workflow": "agent_rag",
+                "workflow": "hybrid_rag",
                 "messages_count": len(messages),
                 "sources_count": len(sources)
             }
@@ -535,14 +536,15 @@ async def crag_stream(
     fastapi_request: Request,
 ):
     """
-    Endpoint Agent RAG avec streaming en temps réel (Server-Sent Events).
+    Endpoint Hybrid RAG avec streaming en temps réel (Server-Sent Events).
     
     Version streaming de /crag/query qui permet de suivre l'exécution
     du workflow node par node et de recevoir la réponse token par token.
     
-    Le workflow Agent RAG:
-    1. VALIDATE_DOMAIN: Vérifie si la question concerne le domaine administratif togolais
-    2. AGENT_RAG: Agent ReAct qui utilise vector_search_tool et web_search_tool
+    Le workflow Hybrid RAG:
+    1. ROUTE_QUESTION: Classifie la question (casual vs admin)
+    2. CASUAL_CONVO: Réponses amicales pour conversations informelles  
+    3. AGENT_RAG: Agent ReAct pour questions administratives
     
     Args:
         body: CragQueryRequest avec question et conversation_id optionnel
@@ -551,8 +553,10 @@ async def crag_stream(
         StreamingResponse avec events SSE (Server-Sent Events)
         
     Format des events:
-        - {"type": "node_start", "node": "validate_domain"}
-        - {"type": "node_end", "node": "validate_domain", "is_valid": true}
+        - {"type": "node_start", "node": "route_question"}
+        - {"type": "node_end", "node": "route_question", "question_type": "casual|admin"}
+        - {"type": "node_start", "node": "casual_convo"}
+        - {"type": "message_chunk", "content": "...", "node": "casual_convo"}
         - {"type": "node_start", "node": "agent_rag"}
         - {"type": "message_chunk", "content": "...", "node": "agent_rag"}
         - {"type": "complete", "conversation_id": "...", "answer": "...", "sources": [...]}
@@ -566,7 +570,7 @@ async def crag_stream(
             thread_id = body.conversation_id or str(uuid4())
             
             print(f"\n{'='*60}")
-            print(f"Agent RAG Stream Request")
+            print(f"Hybrid RAG Stream Request")
             print(f"{'='*60}")
             print(f"Question: {body.question}")
             print(f"Thread ID: {thread_id}")
@@ -598,46 +602,85 @@ async def crag_stream(
                     print(f"Node: {node_name}")
                     
                     # ─────────────────────────────────────────────────
-                    # VALIDATE_DOMAIN node
+                    # ROUTE_QUESTION node
                     # ─────────────────────────────────────────────────
-                    if node_name == "validate_domain":
-                        is_valid = node_output.get("is_valid_domain", True)
+                    if node_name == "route_question":
+                        question_type = node_output.get("question_type", "admin")
                         
-                        # Émettre un status pour validate_domain
+                        # Émettre un status pour route_question
                         yield (
                             json.dumps({
                                 "type": "status",
-                                "step": "validate_domain",
-                                "message": "Validation du domaine..."
+                                "step": "route_question",
+                                "message": "Classification de la question..."
                             }) + "\n"
                         )
                         
                         yield (
                             json.dumps({
                                 "type": "node_start",
-                                "node": "validate_domain",
-                                "message": "Validation du domaine..."
+                                "node": "route_question",
+                                "message": "Classification de la question..."
                             }) + "\n"
                         )
                         
-                        if not is_valid:
+                        yield (
+                            json.dumps({
+                                "type": "node_end",
+                                "node": "route_question",
+                                "question_type": question_type,
+                                "message": f"Question classifiée: {question_type}"
+                            }) + "\n"
+                        )
+                    
+                    # ─────────────────────────────────────────────────
+                    # CASUAL_CONVO node
+                    # ─────────────────────────────────────────────────
+                    elif node_name == "casual_convo":
+                        # Émettre un status pour casual_convo
+                        yield (
+                            json.dumps({
+                                "type": "status",
+                                "step": "casual_convo",
+                                "message": "Conversation informelle..."
+                            }) + "\n"
+                        )
+                        
+                        yield (
+                            json.dumps({
+                                "type": "node_start",
+                                "node": "casual_convo",
+                                "message": "Génération de réponse conversationnelle..."
+                            }) + "\n"
+                        )
+                        
+                        # Extraire la réponse du dernier AIMessage
+                        messages = node_output.get("messages", [])
+                        
+                        for msg in reversed(messages):
+                            if hasattr(msg, 'type') and msg.type == 'ai':
+                                accumulated_answer = msg.content
+                                break
+                        
+                        # Streaming de la réponse casual
+                        chunk_size = 30  # Plus petits chunks pour réponses casual
+                        for i in range(0, len(accumulated_answer), chunk_size):
+                            chunk = accumulated_answer[i:i+chunk_size]
                             yield (
                                 json.dumps({
-                                    "type": "node_end",
-                                    "node": "validate_domain",
-                                    "is_valid": False,
-                                    "message": "Question hors-sujet administratif"
+                                    "type": "message_chunk",
+                                    "content": chunk,
+                                    "node": "casual_convo"
                                 }) + "\n"
                             )
-                        else:
-                            yield (
-                                json.dumps({
-                                    "type": "node_end",
-                                    "node": "validate_domain",
-                                    "is_valid": True,
-                                    "message": "Question validée (domaine administratif)"
-                                }) + "\n"
-                            )
+                        
+                        yield (
+                            json.dumps({
+                                "type": "node_end",
+                                "node": "casual_convo",
+                                "message": f"Réponse conversationnelle générée ({len(accumulated_answer)} caractères)"
+                            }) + "\n"
+                        )
                     
                     # ─────────────────────────────────────────────────
                     # AGENT_RAG node
@@ -734,7 +777,7 @@ async def crag_stream(
             # EVENT FINAL - Workflow complet
             # ─────────────────────────────────────────────────────────
             print(f"\n{'='*60}")
-            print(f"Agent RAG Stream Completed")
+            print(f"Hybrid RAG Stream Completed")
             print(f"{'='*60}")
             print(f"Réponse: {len(accumulated_answer)} caractères")
             print(f"Sources: {len(collected_sources)}")
@@ -809,7 +852,7 @@ async def crag_stream(
                     "answer": accumulated_answer,
                     "sources": collected_sources,
                     "metadata": {
-                        "workflow": "agent_rag",
+                        "workflow": "hybrid_rag",
                         "sources_count": len(collected_sources),
                         "answer_length": len(accumulated_answer)
                     }

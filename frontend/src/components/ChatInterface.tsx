@@ -407,29 +407,22 @@ export const ChatInterface = () => {
               </div>
             ))}
             
-                {/* Afficher le pipeline en temps réel pendant le streaming */}
-                {isLoading && currentToolSteps.length > 0 && (
+                {/* Afficher l'avatar de chargement seulement si pas de message assistant en cours */}
+                {isLoading && (
                   <div className="flex gap-3 justify-start animate-fade-in">
                     <div className="h-10 w-10 flex items-center justify-center flex-shrink-0">
                       <img src={getAvatarForSteps(currentToolSteps)} alt="Dagan" className="h-9 w-9" />
                     </div>
                     <div className="rounded-xl px-3 py-2 max-w-[80%] bg-white border shadow-sm">
-                      <ToolPipeline steps={currentToolSteps} />
-                    </div>
-                  </div>
-                )}
-            
-                {isLoading && currentToolSteps.length === 0 && (
-                  <div className="flex gap-3 justify-start animate-fade-in">
-                    <div className="h-10 w-10 flex items-center justify-center">
-                      <img src={rienImage} alt="Dagan" className="h-9 w-9" />
-                    </div>
-                    <div className="rounded-xl px-4 py-3 bg-white border shadow-sm">
-                      <div className="flex gap-1">
-                        <div className="h-2 w-2 rounded-full bg-accent/60 animate-bounce" style={{ animationDelay: "0ms" }} />
-                        <div className="h-2 w-2 rounded-full bg-accent/60 animate-bounce" style={{ animationDelay: "150ms" }} />
-                        <div className="h-2 w-2 rounded-full bg-accent/60 animate-bounce" style={{ animationDelay: "300ms" }} />
-                      </div>
+                      {currentToolSteps.length > 0 ? (
+                        <ToolPipeline steps={currentToolSteps} />
+                      ) : (
+                        <div className="flex gap-1">
+                          <div className="h-2 w-2 rounded-full bg-accent/60 animate-bounce" style={{ animationDelay: "0ms" }} />
+                          <div className="h-2 w-2 rounded-full bg-accent/60 animate-bounce" style={{ animationDelay: "150ms" }} />
+                          <div className="h-2 w-2 rounded-full bg-accent/60 animate-bounce" style={{ animationDelay: "300ms" }} />
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

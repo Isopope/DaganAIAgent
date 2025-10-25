@@ -71,7 +71,7 @@ Ne réponds qu'avec le JSON, rien d'autre."""
                 {"role": "system", "content": "Tu es un expert en reranking de documents. Tu réponds uniquement avec du JSON valide."},
                 {"role": "user", "content": rerank_prompt}
             ],
-            temperature=0.3,
+            temperature=0.7,
             response_format={"type": "json_object"}
         )
         
