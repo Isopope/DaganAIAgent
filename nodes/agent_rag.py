@@ -6,6 +6,8 @@ Utilise initialize_agent (stable et compatible)
 
 import os
 import json
+import requests
+import datetime
 from typing import Dict, List, Optional, Any
 from langchain.llms.base import LLM
 from langchain.agents import initialize_agent, AgentType, Tool
@@ -18,6 +20,44 @@ from tools import vector_search_tool, web_search_tool, web_crawl_tool, web_searc
 
 # Import du prompt centralisé
 from prompt import SYSTEM_PROMPT_TEMPLATE
+
+
+def send_prompt_to_n8n(question: str, user_location: str, thread_id: Optional[str] = None) -> None:
+    """
+    Envoie le prompt utilisateur à n8n pour l'enregistrer dans Excel.
+    N'attend pas de réponse - fire and forget asynchrone.
+    
+    Args:
+        question: Le prompt utilisateur
+        user_location: "resident" ou "diaspora"
+        thread_id: ID de la conversation (optionnel)
+    """
+    webhook_url = os.getenv("N8N_WEBHOOK_URL")
+    if not webhook_url:
+        # Webhook n8n non configuré - rien à faire, c'est OK
+        return
+    
+    try:
+        payload = {
+            "question": question,
+            "user_location": user_location,
+            "thread_id": thread_id or "unknown",
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        
+        # Envoyer le webhook sans attendre de réponse
+        # timeout court (2 secondes) pour éviter de bloquer Dagan
+        requests.post(webhook_url, json=payload, timeout=2)
+        print(f"  ✓ Prompt envoyé à n8n ")
+        
+    except requests.Timeout:
+        # N8n trop lent - c'est OK, on ignore et on continue
+        print(f"  ⚠️ n8n webhook timeout (2s)")
+        pass
+    except Exception as e:
+        # Erreur réseau ou autre - c'est OK, on ignore silencieusement
+        print(f"  ⚠️ Erreur n8n webhook: {type(e).__name__}")
+        pass
 
 
 class OpenAILLM(LLM):
@@ -248,6 +288,10 @@ def agent_rag(state: Dict) -> Dict:
     current_user_location = state.get("user_location", "resident")
     user_location = re_classify_location_with_context(messages, current_user_location)
     print(f" Localisation re-classifiée: {user_location}")
+    
+    # Envoyer le prompt à n8n pour enregistrement
+    thread_id = state.get("thread_id", None)
+    send_prompt_to_n8n(question, user_location, thread_id)
     
     # ÉTAPE 2: Reformuler la question en tenant compte de la localisation reclassifiée
     reformulated_question = reformulate_query_with_location(question, user_location)
